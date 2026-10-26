@@ -204,6 +204,14 @@ pub fn validate_blocks(body: &Value) -> Result<()> {
         {
             return Err(Error::bad("Unsupported colour"));
         }
+        for label in ["title", "caption"] {
+            if block.get(label).is_some_and(|v| !v.is_string()) {
+                return Err(Error::bad("Media labels must be text"));
+            }
+        }
+        if let Some(source) = block.get("source_url") {
+            validate_url(source.as_str().unwrap_or(""))?;
+        }
         for flag in ["bold", "italic", "underline"] {
             if block.get(flag).is_some_and(|v| !v.is_boolean()) {
                 return Err(Error::bad("Formatting flags must be booleans"));

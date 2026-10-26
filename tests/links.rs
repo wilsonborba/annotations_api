@@ -24,3 +24,18 @@ async fn previews_do_not_fetch_private_hosts() {
             .is_err()
     );
 }
+
+#[test]
+fn youtube_embed_is_derived_only_for_a_valid_video_identifier() {
+    use annotations_api::domain::links::metadata;
+    assert_eq!(
+        metadata("https://youtu.be/dQw4w9WgXcQ").unwrap()["embed_url"],
+        "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"
+    );
+    assert!(
+        metadata("https://youtube.com/watch?v=bad")
+            .unwrap()
+            .get("embed_url")
+            .is_none()
+    );
+}

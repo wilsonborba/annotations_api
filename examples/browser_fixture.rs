@@ -14,23 +14,22 @@ async fn cors(request: Request, next: Next) -> Response {
     } else {
         next.run(request).await
     };
-    if let Some(origin) = origin {
-        if origin
+    if let Some(origin) = origin
+        && origin
             .to_str()
             .is_ok_and(|v| v.starts_with("http://127.0.0.1:") || v.starts_with("http://localhost:"))
-        {
-            response
-                .headers_mut()
-                .insert("access-control-allow-origin", origin);
-            response.headers_mut().insert(
-                "access-control-allow-headers",
-                HeaderValue::from_static("content-type"),
-            );
-            response.headers_mut().insert(
-                "access-control-allow-methods",
-                HeaderValue::from_static("GET,POST,PUT,OPTIONS"),
-            );
-        }
+    {
+        response
+            .headers_mut()
+            .insert("access-control-allow-origin", origin);
+        response.headers_mut().insert(
+            "access-control-allow-headers",
+            HeaderValue::from_static("content-type"),
+        );
+        response.headers_mut().insert(
+            "access-control-allow-methods",
+            HeaderValue::from_static("GET,POST,PUT,OPTIONS"),
+        );
     }
     response
 }

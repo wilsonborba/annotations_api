@@ -47,3 +47,28 @@ async fn invalid_translation_does_not_write_any_documents() {
         assert!(m.lock().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn visibility_is_rechecked_even_if_redis_invalidation_was_missed() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let store = prepared().await;
+    posts::write(&store, "study", post("public")).await.unwrap();
+    posts::publish(&store, "study").await.unwrap();
+    let router = annotations_api::presentation::router(annotations_api::domain::App {
+        store: store.clone(),
+    });
+    let get = || {
+        Request::builder()
+            .uri("/posts/study?lang=en")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(router.clone().oneshot(get()).await.unwrap().status(), 200);
+    // Simulate a committed visibility change with a Redis outage: generation unchanged.
+    sqlx::query("UPDATE posts SET visibility='private' WHERE id='study'")
+        .execute(&store.db)
+        .await
+        .unwrap();
+    assert_eq!(router.oneshot(get()).await.unwrap().status(), 404);
+}

@@ -16,7 +16,32 @@ pub fn metadata(raw: &str) -> Result<Value> {
     } else {
         "link"
     };
-    Ok(json!({"url":raw,"title":domain,"domain":domain,"provider":provider,"thumbnail":""}))
+    let mut out =
+        json!({"url":raw,"title":domain,"domain":domain,"provider":provider,"thumbnail":""});
+    if provider == "youtube" {
+        let video = if domain == "youtu.be" {
+            url.path().trim_start_matches('/').to_string()
+        } else if url.path() == "/watch" {
+            url.query_pairs()
+                .find(|(k, _)| k == "v")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default()
+        } else {
+            url.path()
+                .strip_prefix("/shorts/")
+                .or_else(|| url.path().strip_prefix("/embed/"))
+                .unwrap_or("")
+                .to_string()
+        };
+        if video.len() == 11
+            && video
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            out["embed_url"] = json!(format!("https://www.youtube-nocookie.com/embed/{video}"));
+        }
+    }
+    Ok(out)
 }
 fn public_ip(ip: std::net::IpAddr) -> bool {
     match ip {
