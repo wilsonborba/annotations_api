@@ -1,3 +1,19 @@
+## [1.1.0] - 2026-10-27
+
+### 🚀 Features
+
+- Remove Instant Share items added by mistake (#14)
+- Merge Instant Share item removal (#14)
+- Cite researched sources and embed public Reports charts in demo content (#11)
+- Merge researched demo content with Reports embeds (#11)
+- Return one linked author per article (#15)
+- Merge linked article author (#15)
+
+### 💼 Other
+
+- Promote release/v1.0.0 to development
+- Promote feature/main to development for v1.1.0
+
 ## [1.0.0] - 2026-10-26
 
 ### 🚀 Features
