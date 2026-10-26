@@ -37,6 +37,8 @@ cannot publish in this release. No frontend editor or administration UI exists.
 5. Explicitly publish optional labelled research examples with
    `python3 scripts/populate_demo.py --base-url http://127.0.0.1:8111 --yes`.
    For gateway calls, set `ANNOTATIONS_ADMIN_KEY` in the invoking environment.
+   `--dry-run` resolves the embedded public Reports cards and writes nothing. Each chart
+   caption states whether the card shows live data or sample data.
    Existing published article schemas are reused. Examples are not Wilson's own
    studies and contain no invented experimental measurements.
 
