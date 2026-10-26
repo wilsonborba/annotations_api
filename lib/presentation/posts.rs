@@ -18,13 +18,22 @@ pub fn routes() -> Router<App> {
         .route("/admin/posts/{id}/publish", post(publish))
 }
 pub async fn catalog(State(app): State<App>) -> Result<Json<Value>> {
-    Ok(Json(posts::catalog(&app.store).await?))
+    Ok(Json(
+        cached(&app, "pub:catalog", posts::catalog(&app.store)).await?,
+    ))
 }
 pub async fn catalog_write(State(app): State<App>, Json(body): Json<Value>) -> Result<Json<Value>> {
     Ok(Json(posts::catalog_write(&app.store, body).await?))
 }
 pub async fn list(State(app): State<App>, Query(q): Query<posts::Query>) -> Result<Json<Value>> {
-    Ok(Json(posts::list(&app.store, &q).await?))
+    Ok(Json(
+        cached(
+            &app,
+            &format!("pub:list:{}", serde_json::to_string(&q).unwrap()),
+            posts::list(&app.store, &q),
+        )
+        .await?,
+    ))
 }
 pub async fn detail(
     State(app): State<App>,
@@ -32,7 +41,12 @@ pub async fn detail(
     Query(q): Query<posts::Query>,
 ) -> Result<Json<Value>> {
     Ok(Json(
-        posts::detail(&app.store, &key, &q.lang, false, &q.channel).await?,
+        cached(
+            &app,
+            &format!("pub:detail:{}", serde_json::json!([key, q.lang, q.channel])),
+            posts::detail(&app.store, &key, &q.lang, false, &q.channel),
+        )
+        .await?,
     ))
 }
 pub async fn private(
@@ -53,4 +67,23 @@ pub async fn write(
 }
 pub async fn publish(State(app): State<App>, Path(id): Path<String>) -> Result<Json<Value>> {
     Ok(Json(posts::publish(&app.store, &id).await?))
+}
+
+async fn cached(
+    app: &App,
+    key: &str,
+    fetch: impl std::future::Future<Output = Result<Value>>,
+) -> Result<Value> {
+    let epoch = app.store.cache.epoch().await;
+    if let Some(epoch) = epoch
+        && let Some(hit) = app.store.cache.get_at(epoch, key).await
+        && let Ok(value) = serde_json::from_str(&hit)
+    {
+        return Ok(value);
+    }
+    let value = fetch.await?;
+    if let Some(epoch) = epoch {
+        app.store.cache.put_at(epoch, key, &value.to_string()).await;
+    }
+    Ok(value)
 }

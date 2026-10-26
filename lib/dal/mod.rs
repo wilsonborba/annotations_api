@@ -37,7 +37,7 @@ impl Store {
         Ok(Self {
             db,
             docs: documents::Documents::remote(settings.clone(), http.clone()),
-            cache: cache::Cache(redis.clone()),
+            cache: cache::Cache::new(redis.clone()),
             rooms: rooms::Rooms::new(redis),
             files: files::Files::new(settings, http.clone()),
             http,
@@ -61,7 +61,7 @@ impl Store {
         Self {
             db,
             docs: documents::Documents::Memory(Arc::default()),
-            cache: cache::Cache(None),
+            cache: cache::Cache::fixture(),
             rooms: rooms::Rooms::fixture(),
             files: files::Files::fixture(),
             http: reqwest::Client::new(),

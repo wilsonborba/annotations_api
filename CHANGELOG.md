@@ -6,6 +6,8 @@
 - Merge storage foundation (#2)
 - Validate document bodies against published schema versions (#3)
 - Merge content guardrails (#3)
+- Publish owned multilingual articles through validated APIs (#4)
+- Merge multilingual publishing (#4)
 
 ### ⚙️ Miscellaneous Tasks
 
