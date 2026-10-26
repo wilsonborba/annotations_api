@@ -214,7 +214,7 @@ def studies():
 def populate(base):
     articles = studies()  # Resolve every Reports card before writing anything.
     request(base, 'PUT', '/admin/catalog', {
-        'owners': [{'id': 'demo-editorial', 'display_name': 'Annotations demonstration'}],
+        'owners': [{'id': 'wilson', 'display_name': 'Wilson Borba', 'url': 'https://wilsonborba.com'}, {'id': 'asodya', 'display_name': 'Asodya', 'url': 'https://asodya.com'}],
         'channels': [{'id': 'wilson', 'name': 'Wilson Borba'}, {'id': 'asodya', 'name': 'Asodya'}],
         'languages': [{'code': 'en', 'label': 'English'}, {'code': 'pt-BR', 'label': 'Português'}, {'code': 'th', 'label': 'ไทย'}],
         'topics': [{'id': 'rag', 'name': 'RAG'}, {'id': 'evaluation', 'name': 'Evaluation'}, {'id': 'engineering', 'name': 'Engineering metrics'}],
@@ -226,7 +226,7 @@ def populate(base):
         request(base, 'POST', '/admin/schemas', {'name': 'article-body', 'version': 1, 'fields': [{'path': 'blocks', 'field_type': 'array', 'required': True}]})
         request(base, 'POST', '/admin/schemas/article-body/versions/1/publish', {})
     for slug, topic, translations in articles:
-        request(base, 'PUT', '/admin/posts/demo-' + slug, {'owner_id': 'demo-editorial', 'slug': slug, 'visibility': 'public', 'channels': ['wilson', 'asodya'], 'topics': [topic], 'translations': translations})
+        request(base, 'PUT', '/admin/posts/demo-' + slug, {'owner_id': 'asodya', 'slug': slug, 'visibility': 'public', 'channels': ['wilson', 'asodya'], 'topics': [topic], 'translations': translations})
         request(base, 'POST', '/admin/posts/demo-' + slug + '/publish', {})
         print('Published demonstration:', slug)
 
