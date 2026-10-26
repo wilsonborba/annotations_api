@@ -151,10 +151,15 @@ pub async fn write(store: &Store, id: &str, input: WritePost) -> Result<Value> {
   let mut tx=store.db.begin().await?;
   let old=sqlx::query("SELECT document_id FROM post_translations WHERE post_id=$1").bind(id).fetch_all(&mut *tx).await?.iter().map(|r|r.get::<String,_>("document_id")).collect();
   sqlx::query("INSERT INTO posts(id,owner_id,slug,visibility,status,cover_url,created_at,updated_at) VALUES($1,$2,$3,$4,'draft',$5,$6,$6) ON CONFLICT(id) DO UPDATE SET owner_id=excluded.owner_id,slug=excluded.slug,visibility=excluded.visibility,cover_url=excluded.cover_url,updated_at=excluded.updated_at").bind(id).bind(&input.owner_id).bind(&input.slug).bind(&input.visibility).bind(&input.cover_url).bind(core::now()).execute(&mut *tx).await?;
-  for table in ["post_translations","post_channels","post_topics"]{sqlx::query(&format!("DELETE FROM {table} WHERE post_id=$1")).bind(id).execute(&mut *tx).await?;}
+  for table in ["post_translations","post_channels","post_topics","post_media"]{sqlx::query(&format!("DELETE FROM {table} WHERE post_id=$1")).bind(id).execute(&mut *tx).await?;}
   for ((tr,version),docid) in input.translations.iter().zip(&validated).zip(&created){sqlx::query("INSERT INTO post_translations(post_id,language_code,title,summary,document_id,schema_name,schema_version) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(id).bind(&tr.language).bind(&tr.title).bind(&tr.summary).bind(docid).bind(&tr.schema_name).bind(*version).execute(&mut *tx).await?;}
   for channel in &input.channels{sqlx::query("INSERT INTO post_channels(post_id,channel_id) VALUES($1,$2)").bind(id).bind(channel).execute(&mut *tx).await?;}
   for topic in &input.topics{sqlx::query("INSERT INTO post_topics(post_id,topic_id) VALUES($1,$2)").bind(id).bind(topic).execute(&mut *tx).await?;}
+  let mut media_ids=std::collections::HashSet::new();
+  for tr in &input.translations {for block in tr.body["blocks"].as_array().into_iter().flatten(){
+   if block["type"]=="image" && let Some(url)=block["url"].as_str() && let Ok(url)=url::Url::parse(url) && url.host_str()==Some("api.asodya.com") && let Some(key)=url.path().strip_prefix("/apps/annotations/v1/media/"){media_ids.insert(key.to_string());}
+  }}
+  for key in media_ids{sqlx::query("INSERT INTO post_media(post_id,media_id) VALUES($1,$2)").bind(id).bind(key).execute(&mut *tx).await?;}
   tx.commit().await?;Ok(old)
  }.await;
     match saved {

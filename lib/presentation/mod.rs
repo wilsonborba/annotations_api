@@ -1,3 +1,4 @@
+pub mod media;
 mod posts;
 use crate::{
     core::Result,
@@ -21,6 +22,7 @@ pub fn router(app: App) -> Router {
             post(publish),
         )
         .merge(posts::routes())
+        .merge(media::routes())
         .with_state(app)
 }
 async fn ready(State(app): State<App>) -> Result<Json<serde_json::Value>> {
