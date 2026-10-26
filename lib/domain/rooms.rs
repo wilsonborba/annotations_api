@@ -106,3 +106,43 @@ pub async fn edit(store: &Rooms, code: &str, input: Edit, now: i64) -> Result<Ro
     }
     Err(Error::conflict("The room changed; try again"))
 }
+/// Removes one item; file bytes and quota are released now, or later by expiry cleanup.
+pub async fn remove(store: &crate::dal::Store, code: &str, id: &str, now: i64) -> Result<Room> {
+    for _ in 0..5 {
+        let mut room = store.rooms.get(code, now).await?;
+        let previous = room.revision;
+        let index = room
+            .items
+            .iter()
+            .position(|i| i.id == id)
+            .ok_or_else(Error::missing)?;
+        let item = room.items.remove(index);
+        room.revision += 1;
+        match store.rooms.compare_set(previous, &room, now).await {
+            Ok(()) => {
+                if !item.file_key.is_empty() {
+                    release_file(store, &item).await;
+                }
+                return Ok(room);
+            }
+            Err(e) if e.0 == axum::http::StatusCode::CONFLICT => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::conflict("The room changed; try again"))
+}
+async fn release_file(store: &crate::dal::Store, item: &Item) {
+    // File item IDs are their transfer reservation IDs.
+    let Ok(Some(reservation)) = store.transfers.get(&item.id).await else {
+        return;
+    };
+    let mut deleted = store.files.delete(&item.file_key).await.is_ok();
+    if let Ok(files) = store.files.album(&reservation.album).await {
+        for file in files {
+            deleted &= store.files.delete(&file.key).await.is_ok();
+        }
+    }
+    if deleted && store.transfers.release(&item.id).await.is_err() {
+        tracing::warn!("Removed item quota release is pending until room expiry");
+    }
+}

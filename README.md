@@ -61,6 +61,8 @@ Temporary rooms use `PUT /instant/{code}`, `GET /instant/{code}`,
 `POST /instant/{code}/items` and multipart `POST /instant/{code}/files?size={bytes}`.
 Edits of existing items require the current revision; conflicts return 409.
 Files are read only through `/instant/{code}/files/{id}` while the room is live.
+`DELETE /instant/{code}/items/{id}` removes an item added by mistake; for files it also
+deletes the stored bytes and releases the uploader's allowance. Removal never extends the room.
 The fixed lifetime is 900 seconds from creation. Limits are 50,000,000 bytes per
 file and 50,000,000 active uploaded bytes per uploader IP across rooms. Quota
 reservations are atomic and cleanup retries until FSM deletion succeeds. IP quota

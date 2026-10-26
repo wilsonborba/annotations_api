@@ -19,6 +19,7 @@ pub fn routes() -> Router<App> {
             )),
         )
         .route("/instant/{code}/files/{id}", get(download))
+        .route("/instant/{code}/items/{id}", axum::routing::delete(remove))
 }
 pub async fn read(State(app): State<App>, Path(code): Path<String>) -> Result<Json<Value>> {
     Ok(Json(app.store.rooms.get(&code, now()).await?.public()))
@@ -39,6 +40,14 @@ pub async fn edit(
         rooms::edit(&app.store.rooms, &code, input, now())
             .await?
             .public(),
+    ))
+}
+pub async fn remove(
+    State(app): State<App>,
+    Path((code, id)): Path<(String, String)>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        rooms::remove(&app.store, &code, &id, now()).await?.public(),
     ))
 }
 
