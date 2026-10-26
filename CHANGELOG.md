@@ -1,4 +1,4 @@
-## [unreleased]
+## [1.0.0] - 2026-10-26
 
 ### 🚀 Features
 
@@ -20,9 +20,18 @@
 - Merge temporary file transfers (#9)
 - Retain cleanup ownership until temporary files are deleted (#10)
 - Merge expiring file cleanup (#10)
+- Add API-driven researched demonstration content (#11)
+- Merge explicit demonstration population (#11)
+- Merge backend integration verification (#13)
+
+### 🧪 Testing
+
+- Verify storage recovery, private caching and streamed transfers (#13)
 
 ### ⚙️ Miscellaneous Tasks
 
 - Initialise repository root
 - Add project baseline and ignore local context (#1)
 - Merge repository bootstrap (#1)
+- Separate explicit schema migrations from service installation (#12)
+- Merge explicit operations scripts (#12)
