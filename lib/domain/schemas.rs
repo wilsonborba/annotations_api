@@ -196,13 +196,13 @@ pub fn validate_blocks(body: &Value) -> Result<()> {
             }
             _ => return Err(Error::bad("Unsupported block type")),
         }
-        if let Some(color) = block.get("color") {
-            if !matches!(
+        if let Some(color) = block.get("color")
+            && !matches!(
                 color.as_str(),
                 Some("default" | "muted" | "purple" | "green")
-            ) {
-                return Err(Error::bad("Unsupported colour"));
-            }
+            )
+        {
+            return Err(Error::bad("Unsupported colour"));
         }
         for flag in ["bold", "italic", "underline"] {
             if block.get(flag).is_some_and(|v| !v.is_boolean()) {
