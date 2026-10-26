@@ -76,6 +76,21 @@ async fn cached(
     key: &str,
     fetch: impl std::future::Future<Output = Result<Value>>,
 ) -> Result<Value> {
+    // SQL owns visibility. Include current metadata in the key even when Redis
+    // recovers after a failed invalidation; old public bodies cannot reappear.
+    use sqlx::Row;
+    use std::hash::{Hash, Hasher};
+    let rows = sqlx::query("SELECT p.id,p.status,p.visibility,t.document_id FROM posts p LEFT JOIN post_translations t ON p.id=t.post_id ORDER BY p.id,t.language_code").fetch_all(&app.store.db).await?;
+    let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+    for row in rows {
+        for column in ["id", "status", "visibility", "document_id"] {
+            row.try_get::<String, _>(column)
+                .unwrap_or_default()
+                .hash(&mut fingerprint);
+        }
+    }
+    let key = format!("{key}:{}", fingerprint.finish());
+    let key = key.as_str();
     let epoch = app.store.cache.epoch().await;
     if let Some(epoch) = epoch
         && let Some(hit) = app.store.cache.get_at(epoch, key).await

@@ -25,6 +25,14 @@ pub fn router(app: App) -> Router {
         .merge(posts::routes())
         .merge(media::routes())
         .merge(rooms::routes())
+        .layer(axum::middleware::map_response(
+            |mut response: axum::response::Response| async move {
+                response
+                    .headers_mut()
+                    .insert("cache-control", "no-store".parse().unwrap());
+                response
+            },
+        ))
         .with_state(app)
 }
 async fn ready(State(app): State<App>) -> Result<Json<serde_json::Value>> {
