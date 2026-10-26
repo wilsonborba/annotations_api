@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS owner_links (owner_id TEXT PRIMARY KEY REFERENCES owners(id), url TEXT NOT NULL);
