@@ -39,7 +39,7 @@ pub struct WritePost {
 fn public() -> String {
     "public".into()
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub struct Query {
     #[serde(default)]
     pub q: String,
