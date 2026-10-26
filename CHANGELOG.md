@@ -10,6 +10,8 @@
 - Merge multilingual publishing (#4)
 - Scope read caches by locale and invalidation epoch (#5)
 - Merge read caching (#5)
+- Add provider previews and scoped article images (#6)
+- Merge article media integration (#6)
 
 ### ⚙️ Miscellaneous Tasks
 
