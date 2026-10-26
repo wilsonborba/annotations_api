@@ -1,3 +1,4 @@
+pub mod schemas;
 use crate::dal::Store;
 #[derive(Clone)]
 pub struct App {
