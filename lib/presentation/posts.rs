@@ -11,6 +11,7 @@ use serde_json::Value;
 pub fn routes() -> Router<App> {
     Router::new()
         .route("/catalog", get(catalog))
+        .route("/waitlist", post(waitlist))
         .route("/links/preview", get(link_preview))
         .route("/posts", get(list))
         .route("/posts/{key}", get(detail))
@@ -99,5 +100,14 @@ pub async fn link_preview(
 ) -> Result<Json<Value>> {
     Ok(Json(
         crate::domain::links::preview(&app.store, &q.url).await?,
+    ))
+}
+
+pub async fn waitlist(
+    State(app): State<App>,
+    Json(input): Json<crate::domain::waitlist::Request>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        crate::domain::waitlist::register(&app.store, input).await?,
     ))
 }
