@@ -59,6 +59,9 @@ Supported blocks: heading, paragraph, quote, list, image, link, source, YouTube,
 external PDF, and an individual public Reports embed. Persistent PDFs remain links;
 persistent image uploads use FSM. Private JSON is never placed in the public cache.
 
+Catalog owners may carry a `url`. Each public article returns one `author` with
+`id`, `name` and `url`; publication channels are separate from the author.
+
 Temporary rooms use `PUT /instant/{code}`, `GET /instant/{code}`,
 `POST /instant/{code}/items` and multipart `POST /instant/{code}/files?size={bytes}`.
 Edits of existing items require the current revision; conflicts return 409.
