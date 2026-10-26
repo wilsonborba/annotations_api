@@ -2,6 +2,7 @@ pub mod cache;
 pub mod documents;
 pub mod files;
 pub mod rooms;
+pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ pub struct Store {
     pub docs: documents::Documents,
     pub cache: cache::Cache,
     pub rooms: rooms::Rooms,
+    pub transfers: transfers::Transfers,
     pub files: files::Files,
     pub http: reqwest::Client,
 }
@@ -38,7 +40,8 @@ impl Store {
             db,
             docs: documents::Documents::remote(settings.clone(), http.clone()),
             cache: cache::Cache::new(redis.clone()),
-            rooms: rooms::Rooms::new(redis),
+            rooms: rooms::Rooms::new(redis.clone()),
+            transfers: transfers::Transfers::new(redis),
             files: files::Files::new(settings, http.clone()),
             http,
         })
@@ -67,6 +70,7 @@ impl Store {
             docs: documents::Documents::Memory(Arc::default()),
             cache: cache::Cache::fixture(),
             rooms: rooms::Rooms::fixture(),
+            transfers: transfers::Transfers::fixture(),
             files: files::Files::fixture(),
             http: reqwest::Client::new(),
         }
