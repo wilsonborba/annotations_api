@@ -18,6 +18,8 @@
 - Merge temporary room state (#8)
 - Stream scoped temporary files with atomic per-IP reservations (#9)
 - Merge temporary file transfers (#9)
+- Retain cleanup ownership until temporary files are deleted (#10)
+- Merge expiring file cleanup (#10)
 
 ### ⚙️ Miscellaneous Tasks
 
