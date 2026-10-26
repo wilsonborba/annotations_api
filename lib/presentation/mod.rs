@@ -1,3 +1,4 @@
+pub mod logs;
 pub mod media;
 mod posts;
 mod rooms;
@@ -12,6 +13,7 @@ use axum::{
 };
 pub fn router(app: App) -> Router {
     Router::new()
+        .route("/logs/stream", get(logs::stream))
         .route(
             "/health",
             get(|| async { Json(serde_json::json!({"status":"ok"})) }),
@@ -33,6 +35,7 @@ pub fn router(app: App) -> Router {
                 response
             },
         ))
+        .layer(axum::middleware::from_fn(logs::request_log))
         .with_state(app)
 }
 async fn ready(State(app): State<App>) -> Result<Json<serde_json::Value>> {

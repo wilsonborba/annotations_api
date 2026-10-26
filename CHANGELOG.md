@@ -1,3 +1,13 @@
+## [unreleased]
+
+### 🚀 Features
+
+- *(logs)* Add journald logger and trusted LAN stream
+
+### 💼 Other
+
+- Back-merge v1.1.0 into feature/main
+
 ## [1.1.0] - 2026-10-27
 
 ### 🚀 Features
