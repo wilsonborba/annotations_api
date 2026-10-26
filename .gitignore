@@ -1,0 +1,20 @@
+# Local-only context and secrets
+docs/
+.env
+.env.*
+!.env.example
+.scratch/
+*.local.md
+
+# Editor and operating-system output
+.idea/
+.vscode/
+.DS_Store
+
+# Rust generated and local runtime files
+target/
+coverage/
+var/
+*.db
+*.db-shm
+*.db-wal
