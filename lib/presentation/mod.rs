@@ -1,3 +1,4 @@
+mod posts;
 use crate::{
     core::Result,
     domain::{App, schemas},
@@ -19,6 +20,7 @@ pub fn router(app: App) -> Router {
             "/admin/schemas/{name}/versions/{version}/publish",
             post(publish),
         )
+        .merge(posts::routes())
         .with_state(app)
 }
 async fn ready(State(app): State<App>) -> Result<Json<serde_json::Value>> {
