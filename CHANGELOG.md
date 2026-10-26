@@ -14,6 +14,8 @@
 - Merge article media integration (#6)
 - Register informational waitlist requests idempotently (#7)
 - Merge public waitlist (#7)
+- Add expiring rooms and conflict-aware shared items (#8)
+- Merge temporary room state (#8)
 
 ### ⚙️ Miscellaneous Tasks
 

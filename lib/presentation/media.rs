@@ -106,6 +106,7 @@ async fn response(app: &App, key: &str, private: bool) -> Result<Response> {
         filename: r.get("filename"),
         content_type: r.get("content_type"),
         size_bytes: r.get("size_bytes"),
+        album: String::new(),
     };
     let mut response = Response::new(app.store.files.read(key).await?);
     response.headers_mut().insert(

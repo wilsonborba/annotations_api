@@ -10,6 +10,8 @@ pub struct File {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: i64,
+    #[serde(default)]
+    pub album: String,
 }
 type FixtureFiles = Arc<Mutex<HashMap<String, (File, Vec<u8>)>>>;
 #[derive(Clone)]
@@ -55,6 +57,7 @@ impl Files {
                 filename: filename.into(),
                 content_type: content_type.into(),
                 size_bytes: size,
+                album: album.into(),
             };
             let bytes = tokio::fs::read(path)
                 .await
@@ -126,5 +129,33 @@ impl Files {
             .await?
             .error_for_status()?;
         Ok(axum::body::Body::from_stream(r.bytes_stream()))
+    }
+}
+
+impl Files {
+    pub async fn album(&self, album: &str) -> Result<Vec<File>> {
+        if let Some(m) = &self.memory {
+            return Ok(m
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|(f, _)| f.album == album)
+                .map(|(f, _)| f.clone())
+                .collect());
+        }
+        let s = self.settings.as_ref().ok_or_else(Error::unavailable)?;
+        let value: serde_json::Value = self
+            .http
+            .get(format!(
+                "{}/annotations/albums/{album}",
+                s.fsm_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&s.fsm_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        serde_json::from_value(value["items"].clone()).map_err(|_| Error::unavailable())
     }
 }
