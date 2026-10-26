@@ -1,5 +1,6 @@
 pub mod media;
 mod posts;
+mod rooms;
 use crate::{
     core::Result,
     domain::{App, schemas},
@@ -23,6 +24,7 @@ pub fn router(app: App) -> Router {
         )
         .merge(posts::routes())
         .merge(media::routes())
+        .merge(rooms::routes())
         .with_state(app)
 }
 async fn ready(State(app): State<App>) -> Result<Json<serde_json::Value>> {

@@ -12,6 +12,8 @@
 - Merge read caching (#5)
 - Add provider previews and scoped article images (#6)
 - Merge article media integration (#6)
+- Register informational waitlist requests idempotently (#7)
+- Merge public waitlist (#7)
 
 ### ⚙️ Miscellaneous Tasks
 
