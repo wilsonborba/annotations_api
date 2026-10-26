@@ -58,6 +58,10 @@ impl Store {
             .execute(&db)
             .await
             .unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/002_media.sql"))
+            .execute(&db)
+            .await
+            .unwrap();
         Self {
             db,
             docs: documents::Documents::Memory(Arc::default()),

@@ -11,6 +11,7 @@ use serde_json::Value;
 pub fn routes() -> Router<App> {
     Router::new()
         .route("/catalog", get(catalog))
+        .route("/links/preview", get(link_preview))
         .route("/posts", get(list))
         .route("/posts/{key}", get(detail))
         .route("/admin/catalog", put(catalog_write))
@@ -86,4 +87,17 @@ async fn cached(
         app.store.cache.put_at(epoch, key, &value.to_string()).await;
     }
     Ok(value)
+}
+
+#[derive(serde::Deserialize)]
+pub struct LinkQuery {
+    pub url: String,
+}
+pub async fn link_preview(
+    State(app): State<App>,
+    Query(q): Query<LinkQuery>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        crate::domain::links::preview(&app.store, &q.url).await?,
+    ))
 }

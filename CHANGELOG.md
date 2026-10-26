@@ -8,6 +8,8 @@
 - Merge content guardrails (#3)
 - Publish owned multilingual articles through validated APIs (#4)
 - Merge multilingual publishing (#4)
+- Scope read caches by locale and invalidation epoch (#5)
+- Merge read caching (#5)
 
 ### ⚙️ Miscellaneous Tasks
 
