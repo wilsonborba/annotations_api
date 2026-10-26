@@ -16,6 +16,8 @@
 - Merge public waitlist (#7)
 - Add expiring rooms and conflict-aware shared items (#8)
 - Merge temporary room state (#8)
+- Stream scoped temporary files with atomic per-IP reservations (#9)
+- Merge temporary file transfers (#9)
 
 ### ⚙️ Miscellaneous Tasks
 

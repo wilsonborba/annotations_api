@@ -18,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .ready()
         .await
         .map_err(|_| anyhow::anyhow!("Storage is not ready. Run the explicit migration script."))?;
+    let _cleanup = annotations_api::domain::tasks::spawn(store.clone());
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!(%address,"Annotations API listening");
     axum::serve(
