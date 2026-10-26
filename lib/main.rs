@@ -2,10 +2,8 @@ use annotations_api::{core::Settings, dal::Store, domain::App, presentation};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
     let settings = Settings::load();
+    annotations_api::core::logs::init(&settings, annotations_api::core::logs::sender());
     anyhow::ensure!(
         !settings.database_url.is_empty(),
         "DATABASE_URL is required"

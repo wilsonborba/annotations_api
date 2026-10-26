@@ -1,3 +1,4 @@
+pub mod logs;
 use axum::{
     Json,
     http::StatusCode,
@@ -20,8 +21,12 @@ pub struct Settings {
     pub fsm_key: String,
     pub host: String,
     pub port: u16,
+    pub development: bool,
 }
 impl Settings {
+    pub fn development(&self) -> bool {
+        self.development
+    }
     pub fn load() -> Self {
         fn env(k: &str, d: &str) -> String {
             std::env::var(k).unwrap_or_else(|_| d.into())
@@ -37,6 +42,7 @@ impl Settings {
             fsm_key: env("FSM_API_KEY", ""),
             host: env("HOST", "127.0.0.1"),
             port: env("PORT", "8111").parse().unwrap_or(8111),
+            development: env("DEVELOPMENT_MODE", "false").parse().unwrap_or(false),
         }
     }
 }

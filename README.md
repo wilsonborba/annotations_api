@@ -86,3 +86,23 @@ without reading `.env`. Populate it with the explicit demo command above, changi
 the base URL to `http://127.0.0.1:18111`. The fixture is ephemeral and must not be
 installed or exposed as a production service. Real storage provisioning and live
 acceptance are tracked separately in issues #12 and #13.
+
+
+## Backend live logs
+
+`core/logs` provides debug, info, warning and error functions and formats each event
+as `<RFC3339 timestamp> <LEVEL> <app> <module> <message>`. Debug is development-only;
+info, warning and error are always enabled. Credentials are redacted before the same
+line is written to stderr (journald) and the bounded in-process broadcast stream.
+No local log files are created. Request logs omit queries, headers and bodies.
+
+LAN operators use `GET /logs/stream` (SSE, no backend authentication). Keep the
+service on its existing private listener. Public clients use the gateway's admin-only
+`/apps/annotations/v1/logs/stream`. Slow consumers receive a `gap` event instead of
+unbounded buffering; there is no replay or persistence in this service.
+
+Only api_for_apps records streams in appdb. Its deliberate safety locks stop one
+recording after 30 minutes and purge saved rows older than 15 days. This backend
+never connects to appdb or changes its schema.
+
+Set `DEVELOPMENT_MODE=true` only in a development environment to enable debug logs.
