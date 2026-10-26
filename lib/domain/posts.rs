@@ -75,6 +75,12 @@ pub async fn catalog_write(store: &Store, body: Value) -> Result<Value> {
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| Error::bad("Catalog entry needs a name"))?;
                 sqlx::query(&format!("INSERT INTO {table}({idcol},{namecol}) VALUES($1,$2) ON CONFLICT({idcol}) DO UPDATE SET {namecol}=excluded.{namecol}")).bind(id).bind(name).execute(&mut *tx).await?;
+                if table == "owners"
+                    && let Some(url) = row.get("url")
+                {
+                    let url = crate::domain::schemas::validate_url(url.as_str().unwrap_or(""))?;
+                    sqlx::query("INSERT INTO owner_links(owner_id,url) VALUES($1,$2) ON CONFLICT(owner_id) DO UPDATE SET url=excluded.url").bind(id).bind(url.as_str()).execute(&mut *tx).await?;
+                }
             }
         }
     }
@@ -201,6 +207,12 @@ async fn summary(store: &Store, row: &sqlx::any::AnyRow, lang: &str) -> Result<V
         .or(trs.first())
         .ok_or_else(Error::missing)?;
     let mut out = json!({"id":id,"slug":row.get::<String,_>("slug"),"owner_id":row.get::<String,_>("owner_id"),"cover_url":row.get::<String,_>("cover_url"),"updated_at":row.get::<i64,_>("updated_at"),"language":selected.get::<String,_>("language_code"),"title":selected.get::<String,_>("title"),"summary":selected.get::<String,_>("summary"),"available_languages":trs.iter().map(|r|r.get::<String,_>("language_code")).collect::<Vec<_>>()});
+    // One author per article: the post owner, with an optional public link.
+    let author = sqlx::query("SELECT o.id,o.display_name,COALESCE(l.url,'') AS url FROM owners o LEFT JOIN owner_links l ON l.owner_id=o.id WHERE o.id=$1")
+        .bind(row.get::<String, _>("owner_id"))
+        .fetch_one(&store.db)
+        .await?;
+    out["author"] = json!({"id":author.get::<String,_>("id"),"name":author.get::<String,_>("display_name"),"url":author.get::<String,_>("url")});
     for (key, table, col) in [
         ("channels", "post_channels", "channel_id"),
         ("topics", "post_topics", "topic_id"),

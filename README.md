@@ -37,6 +37,8 @@ cannot publish in this release. No frontend editor or administration UI exists.
 5. Explicitly publish optional labelled research examples with
    `python3 scripts/populate_demo.py --base-url http://127.0.0.1:8111 --yes`.
    For gateway calls, set `ANNOTATIONS_ADMIN_KEY` in the invoking environment.
+   `--dry-run` resolves the embedded public Reports cards and writes nothing. Each chart
+   caption states whether the card shows live data or sample data.
    Existing published article schemas are reused. Examples are not Wilson's own
    studies and contain no invented experimental measurements.
 
@@ -57,10 +59,15 @@ Supported blocks: heading, paragraph, quote, list, image, link, source, YouTube,
 external PDF, and an individual public Reports embed. Persistent PDFs remain links;
 persistent image uploads use FSM. Private JSON is never placed in the public cache.
 
+Catalog owners may carry a `url`. Each public article returns one `author` with
+`id`, `name` and `url`; publication channels are separate from the author.
+
 Temporary rooms use `PUT /instant/{code}`, `GET /instant/{code}`,
 `POST /instant/{code}/items` and multipart `POST /instant/{code}/files?size={bytes}`.
 Edits of existing items require the current revision; conflicts return 409.
 Files are read only through `/instant/{code}/files/{id}` while the room is live.
+`DELETE /instant/{code}/items/{id}` removes an item added by mistake; for files it also
+deletes the stored bytes and releases the uploader's allowance. Removal never extends the room.
 The fixed lifetime is 900 seconds from creation. Limits are 50,000,000 bytes per
 file and 50,000,000 active uploaded bytes per uploader IP across rooms. Quota
 reservations are atomic and cleanup retries until FSM deletion succeeds. IP quota

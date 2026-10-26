@@ -72,3 +72,28 @@ async fn visibility_is_rechecked_even_if_redis_invalidation_was_missed() {
         .unwrap();
     assert_eq!(router.oneshot(get()).await.unwrap().status(), 404);
 }
+#[tokio::test]
+async fn articles_return_one_linked_author() {
+    let s = prepared().await;
+    posts::catalog_write(
+        &s,
+        json!({"owners":[{"id":"wilson","display_name":"Wilson Borba","url":"https://wilsonborba.com"}]}),
+    )
+    .await
+    .unwrap();
+    posts::write(&s, "study", post("public")).await.unwrap();
+    posts::publish(&s, "study").await.unwrap();
+    let author = json!({"id":"wilson","name":"Wilson Borba","url":"https://wilsonborba.com/"});
+    let article = posts::detail(&s, "study", "en", false, "").await.unwrap();
+    assert_eq!(article["author"], author);
+    let list = posts::list(&s, &posts::Query::default()).await.unwrap();
+    assert_eq!(list["items"][0]["author"], author);
+    assert!(
+        posts::catalog_write(
+            &s,
+            json!({"owners":[{"id":"wilson","display_name":"Wilson Borba","url":"javascript:alert(1)"}]}),
+        )
+        .await
+        .is_err()
+    );
+}
