@@ -1,4 +1,5 @@
 pub mod links;
+pub mod names;
 pub mod posts;
 pub mod rooms;
 pub mod schemas;

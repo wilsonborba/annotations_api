@@ -6,6 +6,16 @@ pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
+/// Migrations in apply order for SQLite fixtures. 005 uses its tested SQLite equivalent.
+pub const SQLITE_MIGRATIONS: [&str; 7] = [
+    include_str!("../../migrations/001_schema.sql"),
+    include_str!("../../migrations/002_media.sql"),
+    include_str!("../../migrations/003_owner_links.sql"),
+    include_str!("../../migrations/004_v2_notes.sql"),
+    include_str!("../../tests/sqlite/005_v2_note_changes.sql"),
+    include_str!("../../migrations/006_v2_projects_tags.sql"),
+    include_str!("../../migrations/007_v2_files_operations.sql"),
+];
 #[derive(Clone)]
 pub struct Store {
     pub db: AnyPool,
@@ -57,18 +67,9 @@ impl Store {
             .execute(&db)
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/001_schema.sql"))
-            .execute(&db)
-            .await
-            .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/002_media.sql"))
-            .execute(&db)
-            .await
-            .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/003_owner_links.sql"))
-            .execute(&db)
-            .await
-            .unwrap();
+        for migration in SQLITE_MIGRATIONS {
+            sqlx::raw_sql(migration).execute(&db).await.unwrap();
+        }
         Self {
             db,
             docs: documents::Documents::Memory(Arc::default()),
