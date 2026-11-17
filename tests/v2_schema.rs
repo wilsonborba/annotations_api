@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 18] = [
+const V2_TABLES: [&str; 19] = [
     "authors",
     "notes",
     "note_revisions",
@@ -23,6 +23,7 @@ const V2_TABLES: [&str; 18] = [
     "note_save_revisions",
     "note_revision_cleanup",
     "note_titles",
+    "note_publication_titles",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
@@ -140,6 +141,7 @@ async fn schema_has_no_json_array_or_body_columns() {
         include_str!("sqlite/005_v2_note_changes.sql"),
         include_str!("sqlite/008_v2_save_operations.sql"),
         include_str!("../migrations/009_v2_note_titles.sql"),
+        include_str!("../migrations/010_v2_publication_titles.sql"),
     ];
     for text in migrations {
         let lower = text.to_lowercase();

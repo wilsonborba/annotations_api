@@ -5,6 +5,7 @@ pub mod note_documents;
 pub mod note_saves;
 pub mod notes;
 pub mod posts;
+pub mod publication;
 pub mod rooms;
 pub mod schemas;
 pub mod tasks;

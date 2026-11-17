@@ -14,6 +14,7 @@ use crate::{
             self, Content, Metadata, Representation, RepresentationInput, SaveError, SaveRequest,
             SaveResult, Target,
         },
+        publication,
     },
 };
 use axum::http::StatusCode;
@@ -43,10 +44,10 @@ impl NoteError {
             current_revision: None,
         }
     }
-    fn invalid(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(code: &str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, message)
     }
-    fn not_found() -> Self {
+    pub(crate) fn not_found() -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", "Content is unavailable")
     }
     fn conflict(current_revision: i64) -> Self {
@@ -143,7 +144,7 @@ type R<T> = std::result::Result<T, NoteError>;
 
 // Request parsing ---------------------------------------------------------------
 
-fn parse_body(raw: &[u8]) -> R<Map<String, Value>> {
+pub(crate) fn parse_body(raw: &[u8]) -> R<Map<String, Value>> {
     if raw.len() > MAX_BODY_BYTES {
         return Err(NoteError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -168,7 +169,7 @@ fn parse_body(raw: &[u8]) -> R<Map<String, Value>> {
 }
 
 /// Reject fields that the request does not define (for example `owner_id`).
-fn allow(map: &Map<String, Value>, keys: &[&str], at: &str) -> R<()> {
+pub(crate) fn allow(map: &Map<String, Value>, keys: &[&str], at: &str) -> R<()> {
     let mut unknown: Vec<&String> = map.keys().filter(|k| !keys.contains(&k.as_str())).collect();
     unknown.sort();
     match unknown.first() {
@@ -180,14 +181,14 @@ fn allow(map: &Map<String, Value>, keys: &[&str], at: &str) -> R<()> {
     }
 }
 
-fn wrong_type(field: &str) -> NoteError {
+pub(crate) fn wrong_type(field: &str) -> NoteError {
     NoteError::invalid(
         "invalid_type",
         format!("The value has the wrong type: {field}"),
     )
 }
 
-fn representation_name(value: &str, field: &str) -> R<Representation> {
+pub(crate) fn representation_name(value: &str, field: &str) -> R<Representation> {
     Representation::parse(value).ok_or_else(|| {
         NoteError::invalid(
             "invalid_representation",
@@ -297,7 +298,7 @@ fn metadata(value: &Value) -> R<Metadata> {
     })
 }
 
-fn token(s: &str) -> bool {
+pub(crate) fn token(s: &str) -> bool {
     (1..=128).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_graphic())
 }
 
@@ -375,11 +376,7 @@ async fn summary(store: &Store, owner: &str, row: &sqlx::any::AnyRow) -> R<Value
         .iter()
         .map(|r| json!({"representation": r.get::<String,_>("representation"), "revision_id": r.get::<String,_>("revision_id"), "schema_version": r.get::<i64,_>("schema_version")}))
         .collect();
-    let published = sqlx::query("SELECT note_id FROM note_publications WHERE note_id=$1")
-        .bind(&note_id)
-        .fetch_optional(&store.db)
-        .await?
-        .is_some();
+    let published = publication::is_published(store, &note_id).await?;
     let title: String = row.get("title");
     Ok(json!({
         "note_id": note_id,
@@ -434,28 +431,7 @@ pub async fn get(store: &Store, owner: &str, note_id: &str, view: View) -> R<Val
         representations.push(entry);
     }
     out["representations"] = Value::Array(representations);
-    out["publication"] = match sqlx::query(
-        "SELECT revision,language_code,updated_at FROM note_publications WHERE note_id=$1",
-    )
-    .bind(note_id)
-    .fetch_optional(&store.db)
-    .await?
-    {
-        None => Value::Null,
-        Some(p) => {
-            let published: Vec<Value> = sqlx::query("SELECT representation,revision_id FROM note_published_representations WHERE note_id=$1 ORDER BY representation")
-                .bind(note_id).fetch_all(&store.db).await?
-                .iter()
-                .map(|r| json!({"representation": r.get::<String,_>("representation"), "revision_id": r.get::<String,_>("revision_id")}))
-                .collect();
-            json!({
-                "revision": p.get::<i64, _>("revision"),
-                "language": p.get::<String, _>("language_code"),
-                "representations": published,
-                "updated_at": p.get::<i64, _>("updated_at"),
-            })
-        }
-    };
+    out["publication"] = publication::owner_block(store, note_id).await?;
     Ok(out)
 }
 
