@@ -4,6 +4,7 @@
 use crate::domain::{
     App,
     notes::{self, ListQuery, NoteError, View},
+    publication,
 };
 use axum::{
     Json, Router,
@@ -24,6 +25,10 @@ pub fn routes() -> Router<App> {
         .route(
             "/me/notes/{note_id}",
             get(detail).put(replace).patch(change).delete(remove),
+        )
+        .route(
+            "/me/notes/{note_id}/publication",
+            get(publication_detail).put(publish).delete(unpublish),
         )
         .layer(DefaultBodyLimit::max(notes::MAX_BODY_BYTES + 1))
 }
@@ -51,6 +56,25 @@ impl<S: Send + Sync> FromRequestParts<S> for Owner {
 
 /// The expected note revision from `If-Match` (`"3"` or `3`).
 fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
+    if_match_from(headers, 1)
+}
+
+/// The expected publication revision from `If-Match`; `0` means never published.
+fn publication_if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
+    if_match_from(headers, 0).map_err(|e| {
+        if e.code == "invalid_if_match" {
+            NoteError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_if_match",
+                "If-Match must be one publication revision (0 or more)",
+            )
+        } else {
+            e
+        }
+    })
+}
+
+fn if_match_from(headers: &HeaderMap, min: i64) -> Result<i64, NoteError> {
     let raw = headers
         .get(header::IF_MATCH)
         .ok_or_else(NoteError::if_match_required)?
@@ -63,7 +87,7 @@ fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
         .unwrap_or(raw);
     raw.parse::<i64>()
         .ok()
-        .filter(|n| *n > 0)
+        .filter(|n| *n >= min)
         .ok_or_else(NoteError::invalid_if_match)
 }
 
@@ -198,4 +222,40 @@ async fn remove(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publication_detail(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+) -> Result<Response, NoteError> {
+    let (body, revision) = publication::get(&app.store, &owner, &note_id).await?;
+    Ok(tagged(StatusCode::OK, body, revision))
+}
+
+async fn publish(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, NoteError> {
+    let expected = publication_if_match(&headers)?;
+    let (body, revision) = publication::put(&app.store, &owner, &note_id, expected, &body).await?;
+    Ok(tagged(StatusCode::OK, body, revision))
+}
+
+async fn unpublish(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, NoteError> {
+    let expected = publication_if_match(&headers)?;
+    let revision = publication::delete(&app.store, &owner, &note_id, expected).await?;
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    if let Ok(value) = HeaderValue::from_str(&format!("\"{revision}\"")) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    Ok(response)
 }

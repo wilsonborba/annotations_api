@@ -10,6 +10,7 @@
 - *(domain)* Let ink-only groups overlap like free ink (#20)
 - *(domain)* Save note revisions with crash-safe reconciliation (#21)
 - *(notes)* Add the owner working-copy API with manual sync, conflicts and account binding (#22)
+- *(notes)* Publish Original, Typed or both as independent public snapshots (#23)
 
 ### 💼 Other
 
