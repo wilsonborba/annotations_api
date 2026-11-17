@@ -332,6 +332,10 @@ struct Area {
     height: Option<f64>,
 }
 impl Area {
+    /// A point in integer 1/100 page units.
+    fn hundredths(&self, x: i64, y: i64, path: &str) -> R<()> {
+        self.point(x as f64 / 100.0, y as f64 / 100.0, path)
+    }
     fn point(&self, x: f64, y: f64, path: &str) -> R<()> {
         if x < 0.0 || x > self.width || y < 0.0 || self.height.is_some_and(|h| y > h) {
             return fail("out_of_bounds", path);
@@ -564,34 +568,48 @@ impl Ctx<'_> {
         }
         color(item, "color")?;
         opacity(item)?;
-        let samples = item.arr("samples")?;
-        if samples.is_empty() {
-            return fail("empty_array", item.at("samples"));
+        // Samples are stored column by column as integers: x and y in 1/100 page
+        // units, t in ms from the stroke start, pressure 0 to 1000, tilt in mrad.
+        let samples = Obj::new(item.req("samples")?, &item.at("samples"))?;
+        samples.allow(&["x", "y", "t", "pressure", "tilt"])?;
+        let xs = samples.ints("x")?;
+        if xs.is_empty() {
+            return fail("empty_array", samples.at("x"));
         }
-        if samples.len() > self.limits.max_samples_per_stroke {
+        if xs.len() > self.limits.max_samples_per_stroke {
             return fail("too_many_samples", item.at("samples"));
         }
-        let mut last = 0;
-        for (i, s) in samples.iter().enumerate() {
-            let s = Obj::new(s, &format!("{}[{i}]", item.at("samples")))?;
-            s.allow(&["x", "y", "t", "pressure", "tilt"])?;
-            let (x, y) = (s.num("x")?, s.num("y")?);
-            area.point(x, y, &s.at("x"))?;
-            let t = s.int("t")?;
-            if (i == 0 && t != 0) || t < last {
-                return fail("invalid_sample_order", s.at("t"));
+        let column = |key: &str, required: bool| -> R<Option<Vec<i64>>> {
+            if !required && samples.opt(key).is_none() {
+                return Ok(None);
             }
-            last = t;
-            if s.opt("pressure").is_some() {
-                s.range("pressure", 0.0, 1.0)?;
+            let values = samples.ints(key)?;
+            if values.len() != xs.len() {
+                return fail("invalid_count", samples.at(key));
             }
-            if s.opt("tilt").is_some() {
-                s.range("tilt", 0.0, std::f64::consts::FRAC_PI_2)?;
+            Ok(Some(values))
+        };
+        let ys = column("y", true)?.unwrap_or_default();
+        let ts = column("t", true)?.unwrap_or_default();
+        for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
+            area.hundredths(*x, *y, &format!("{}[{i}]", samples.at("x")))?;
+        }
+        for (i, t) in ts.iter().enumerate() {
+            if (i == 0 && *t != 0) || (i > 0 && *t < ts[i - 1]) {
+                return fail("invalid_sample_order", format!("{}[{i}]", samples.at("t")));
             }
         }
-        self.nodes(item, "nodes", area, Some(samples.len()))
+        for (key, max) in [("pressure", PRESSURE_MAX), ("tilt", TILT_MAX)] {
+            if let Some(values) = column(key, false)?
+                && let Some(i) = values.iter().position(|v| *v < 0 || *v > max)
+            {
+                return fail("out_of_range", format!("{}[{i}]", samples.at(key)));
+            }
+        }
+        self.nodes(item, "nodes", area, Some(xs.len()))
     }
 
+    /// Editable nodes and handles use integer 1/100 page units.
     fn nodes(&self, item: &Obj, key: &str, area: Area, samples: Option<usize>) -> R<()> {
         let nodes = item.arr(key)?;
         if nodes.is_empty() {
@@ -607,15 +625,15 @@ impl Ctx<'_> {
             } else {
                 n.allow(&["x", "y", "in", "out", "mode", "corner"])?;
             }
-            area.point(n.num("x")?, n.num("y")?, &n.at("x"))?;
+            area.hundredths(n.int("x")?, n.int("y")?, &n.at("x"))?;
             n.variant("mode", &["independent", "smooth", "symmetric"])?;
             n.bool("corner")?;
             for h in ["in", "out"] {
                 if let Some(v) = n.opt(h) {
                     let handle = Obj::new(v, &n.at(h))?;
                     handle.allow(&["x", "y"])?;
-                    handle.num("x")?;
-                    handle.num("y")?;
+                    handle.int("x")?;
+                    handle.int("y")?;
                 }
             }
             if let (Some(count), Some(_)) = (samples, n.opt("sample")) {
@@ -831,6 +849,10 @@ impl Ctx<'_> {
     }
 }
 
+/// Pressure is stored as 0 to 1000; tilt as 0 to pi/2 in milliradians.
+const PRESSURE_MAX: i64 = 1000;
+const TILT_MAX: i64 = 1571;
+
 static HEX_COLOR: LazyLock<Regex> = LazyLock::new(|| Regex::new("^#[0-9A-Fa-f]{8}$").unwrap());
 static MARKUP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)</?[a-z!?][^<>]*>|<!--|javascript:").unwrap());
@@ -983,6 +1005,18 @@ impl<'a> Obj<'a> {
         self.req(key)?
             .as_i64()
             .ok_or_else(|| DocumentError::new("invalid_type", self.at(key)))
+    }
+    /// An array of integers. A float or another type is `invalid_type` at its index.
+    fn ints(&self, key: &str) -> R<Vec<i64>> {
+        self.arr(key)?
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_i64().ok_or_else(|| {
+                    DocumentError::new("invalid_type", format!("{}[{i}]", self.at(key)))
+                })
+            })
+            .collect()
     }
     fn range(&self, key: &str, min: f64, max: f64) -> R<f64> {
         let n = self.num(key)?;
