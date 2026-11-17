@@ -356,29 +356,40 @@ async fn files_must_be_ready_files_of_the_owner_and_schema_must_be_published() {
 /// Measurement used to set `NOTE_LIMITS`. Run with `--nocapture` to see the numbers.
 /// Assumptions: a page 1000 units wide, handwriting sampled at 240 Hz (the highest
 /// common stylus rate), 0.35 s per stroke, one editable node per 10 samples,
-/// coordinates with 2 decimals, pressure and tilt present.
+/// column-wise integer samples (1/100 page units), pressure and tilt present.
 #[test]
 fn realistic_notes_fit_the_limits() {
     fn stroke(i: usize, samples: usize) -> Value {
+        // Integer columns: x and y in 1/100 page units, t in ms, pressure 0 to 1000,
+        // tilt in milliradians.
         let x0 = 40.0 + (i % 40) as f64 * 23.0;
         let y0 = 60.0 + (i / 40) as f64 * 36.0;
-        let r = |v: f64| (v * 100.0).round() / 100.0;
-        let s: Vec<Value> = (0..samples)
-            .map(|k| {
-                let a = k as f64 / samples as f64;
-                json!({"x":r(x0 + a * 18.37),"y":r(y0 + (a * std::f64::consts::TAU).sin() * 9.13),"t":(k * 1000 / 240),"pressure":r(0.35 + a * 0.41),"tilt":r(0.61 + a * 0.13)})
-            })
+        let q = |v: f64| (v * 100.0).round() as i64;
+        let a = |k: usize| k as f64 / samples as f64;
+        let xs: Vec<i64> = (0..samples).map(|k| q(x0 + a(k) * 18.37)).collect();
+        let ys: Vec<i64> = (0..samples)
+            .map(|k| q(y0 + (a(k) * std::f64::consts::TAU).sin() * 9.13))
+            .collect();
+        let ts: Vec<usize> = (0..samples).map(|k| k * 1000 / 240).collect();
+        let ps: Vec<i64> = (0..samples)
+            .map(|k| (350.0 + a(k) * 410.0).round() as i64)
+            .collect();
+        let tilts: Vec<i64> = (0..samples)
+            .map(|k| (610.0 + a(k) * 130.0).round() as i64)
             .collect();
         let n: Vec<Value> = (0..samples.div_ceil(10))
             .map(|k| {
-                let p = &s[(k * 10).min(samples - 1)];
-                json!({"x":p["x"],"y":p["y"],"in":{"x":r(p["x"].as_f64().unwrap() - 2.11),"y":p["y"]},"out":{"x":r(p["x"].as_f64().unwrap() + 2.11),"y":p["y"]},"mode":"smooth","corner":false,"sample":(k * 10).min(samples - 1)})
+                let j = (k * 10).min(samples - 1);
+                json!({"x":xs[j],"y":ys[j],"in":{"x":xs[j] - 211,"y":ys[j]},"out":{"x":xs[j] + 211,"y":ys[j]},"mode":"smooth","corner":false,"sample":j})
             })
             .collect();
-        json!({"id":format!("s{i}"),"kind":"stroke","tool":"round","brush_version":1,"width":2.5,"color":"#000000FF","opacity":1,"samples":s,"nodes":n})
+        json!({"id":format!("s{i}"),"kind":"stroke","tool":"round","brush_version":1,"width":2.5,"color":"#000000FF","opacity":1,"samples":{"x":xs,"y":ys,"t":ts,"pressure":ps,"tilt":tilts},"nodes":n})
     }
     let samples = (240.0_f64 * 0.35).round() as usize;
     let one = serde_json::to_vec(&stroke(0, samples)).unwrap().len();
+    let parts = stroke(0, samples);
+    let sample_bytes = serde_json::to_vec(&parts["samples"]).unwrap().len();
+    let node_bytes = serde_json::to_vec(&parts["nodes"]).unwrap().len();
     let one_120 = serde_json::to_vec(&stroke(0, samples / 2)).unwrap().len();
     let dense_page = 800; // about 250 words with 3 strokes per word
     let page = |strokes: usize| json!({"page":{"width":1000,"background":{"kind":"ruled","spacing":32,"visibility":0.4}},"items":(0..strokes).map(|i|stroke(i, samples)).collect::<Vec<_>>()});
@@ -387,7 +398,7 @@ fn realistic_notes_fit_the_limits() {
     let long_bytes = serde_json::to_vec(&long).unwrap().len();
     let fit = NOTE_LIMITS.max_document_bytes / one;
     println!(
-        "samples per stroke {samples}; bytes per stroke {one} (at 120 Hz {one_120}); dense page {dense_page} strokes = {page_bytes} bytes; 30 s stroke = {long_bytes} bytes; strokes that fit the byte limit {fit}"
+        "samples per stroke {samples}; bytes per stroke {one} (samples {sample_bytes}, nodes {node_bytes}; at 120 Hz {one_120}); dense page {dense_page} strokes = {page_bytes} bytes; 30 s stroke = {long_bytes} bytes; strokes that fit the byte limit {fit}"
     );
     let ok = note_documents::check_document(Family::Original, 1, &page(dense_page), &NOTE_LIMITS);
     assert!(ok.is_ok(), "{ok:?}");

@@ -28,24 +28,24 @@
         "width": 2.5,
         "color": "#000000FF",
         "opacity": 1,
-        "samples": [
-          {
-            "x": 10,
-            "y": 10,
-            "t": 0,
-            "pressure": null,
-            "tilt": null
-          },
-          {
-            "x": 12,
-            "y": 11,
-            "t": 8
-          }
-        ],
+        "samples": {
+          "x": [
+            1000,
+            1200
+          ],
+          "y": [
+            1000,
+            1100
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
         "nodes": [
           {
-            "x": 10,
-            "y": 10,
+            "x": 1000,
+            "y": 1000,
             "mode": "symmetric",
             "corner": false
           }

@@ -5,6 +5,7 @@
 - *(logs)* Add journald logger and trusted LAN stream
 - *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
 - *(schemas)* Add note document v2 families and nested item validation (#19)
+- *(schemas)* Store stroke samples as integer columns (#19)
 
 ### 💼 Other
 

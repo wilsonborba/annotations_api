@@ -28,41 +28,41 @@
         "width": 2.5,
         "color": "#000000FF",
         "opacity": 1,
-        "samples": [
-          {
-            "x": 10,
-            "y": 10,
-            "t": 0
-          },
-          {
-            "x": 11,
-            "y": 10,
-            "t": 16
-          },
-          {
-            "x": 12,
-            "y": 10,
-            "t": 8
-          }
-        ],
+        "samples": {
+          "x": [
+            1000,
+            1100,
+            1200
+          ],
+          "y": [
+            1000,
+            1000,
+            1000
+          ],
+          "t": [
+            0,
+            16,
+            8
+          ]
+        },
         "nodes": [
           {
-            "x": 100,
-            "y": 300,
+            "x": 10000,
+            "y": 30000,
             "out": {
-              "x": 106,
-              "y": 298
+              "x": 10600,
+              "y": 29800
             },
             "mode": "smooth",
             "corner": false,
             "sample": 0
           },
           {
-            "x": 116,
-            "y": 300,
+            "x": 11600,
+            "y": 30000,
             "in": {
-              "x": 110,
-              "y": 300
+              "x": 11000,
+              "y": 30000
             },
             "mode": "independent",
             "corner": true,
@@ -75,6 +75,6 @@
   "expect": {
     "valid": false,
     "code": "invalid_sample_order",
-    "path": "items[0].samples[2].t"
+    "path": "items[0].samples.t[2]"
   }
 }

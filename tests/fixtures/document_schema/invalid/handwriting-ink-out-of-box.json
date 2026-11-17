@@ -26,47 +26,51 @@
             "width": 2.5,
             "color": "#000000FF",
             "opacity": 1,
-            "samples": [
-              {
-                "x": 10,
-                "y": 60,
-                "t": 0,
-                "pressure": 0.5,
-                "tilt": 0.6
-              },
-              {
-                "x": 14,
-                "y": 63,
-                "t": 8,
-                "pressure": 0.5,
-                "tilt": 0.6
-              },
-              {
-                "x": 18,
-                "y": 60,
-                "t": 16,
-                "pressure": 0.5,
-                "tilt": 0.6
-              }
-            ],
+            "samples": {
+              "x": [
+                1000,
+                1400,
+                1800
+              ],
+              "y": [
+                6000,
+                6300,
+                6000
+              ],
+              "t": [
+                0,
+                8,
+                16
+              ],
+              "pressure": [
+                500,
+                500,
+                500
+              ],
+              "tilt": [
+                600,
+                600,
+                600
+              ]
+            },
             "nodes": [
               {
-                "x": 10,
-                "y": 60,
+                "x": 1000,
+                "y": 6000,
                 "out": {
-                  "x": 16,
-                  "y": 58
+                  "x": 1600,
+                  "y": 5800
                 },
                 "mode": "smooth",
                 "corner": false,
                 "sample": 0
               },
               {
-                "x": 18,
-                "y": 60,
+                "x": 1800,
+                "y": 6000,
                 "in": {
-                  "x": 12,
-                  "y": 60
+                  "x": 1200,
+                  "y": 6000
                 },
                 "mode": "independent",
                 "corner": true,
@@ -81,6 +85,6 @@
   "expect": {
     "valid": false,
     "code": "out_of_bounds",
-    "path": "blocks[0].ink[0].samples[0].x"
+    "path": "blocks[0].ink[0].samples.x[0]"
   }
 }

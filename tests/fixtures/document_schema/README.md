@@ -30,12 +30,27 @@ One JSON object per file:
 An empty path means the whole document. Checks run in document order, so the first
 error is stable.
 
-## Units
+## Units and stroke encoding
 
 Positions and sizes use logical page units (1 unit is 1 logical pixel at zoom 1.0).
-`page.width` comes from the document. Sample `t` is integer milliseconds from the
-stroke start. Pressure is 0 to 1, tilt is 0 to pi/2 radians, and both can be absent
-or null. Angles are radians. Colors are `#RRGGBBAA`. `captured_at` is Unix seconds.
+`page.width` comes from the document. Angles are radians. Colors are `#RRGGBBAA`.
+`captured_at` is Unix seconds.
+
+Stroke samples are stored column by column inside each stroke, as integer arrays
+of the same length:
+
+```json
+"samples": {"x": [10000, 10400], "y": [30000, 30300], "t": [0, 8], "pressure": [500, 520], "tilt": [600, 610]}
+```
+
+- `x`, `y`: 1/100 of a page unit (10000 is 100.0 units). Inside the page width (or the
+  typed handwriting box), `y` at or above 0.
+- `t`: milliseconds from the stroke start. Starts at 0 and never decreases.
+- `pressure`: optional column, 0 to 1000. `tilt`: optional column, 0 to 1571
+  milliradians (pi/2). A missing column means the device gave no value.
+
+Editable nodes (`x`, `y`) and their `in` and `out` handles of strokes and shape paths
+also use integer 1/100 page units. Other shapes and blocks use page units.
 
 ## Error codes
 
