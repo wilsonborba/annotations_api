@@ -30,6 +30,27 @@ pub const NOTE_LIMITS: NoteLimits = NoteLimits {
     max_nodes_per_stroke: 1_000,
     max_document_bytes: 7_500_000,
 };
+/// Retry and cleanup bounds of the note save pipeline and its reconciliation task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveSettings {
+    /// A started save older than this is treated as stopped by the task.
+    pub grace_seconds: i64,
+    /// Operations and revisions that one task run handles at most, each.
+    pub batch: i64,
+    /// Task attempts for one stopped operation before it waits for an operator.
+    pub max_attempts: i64,
+    /// Age after which a revision that is not current, not published and not a
+    /// source of another revision is removed.
+    pub revision_retention_seconds: i64,
+}
+/// Default save bounds. A save normally ends in seconds; the grace period leaves
+/// room for slow uploads of large documents before the task cleans up.
+pub const SAVE_SETTINGS: SaveSettings = SaveSettings {
+    grace_seconds: 900,
+    batch: 100,
+    max_attempts: 5,
+    revision_retention_seconds: 86_400,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,

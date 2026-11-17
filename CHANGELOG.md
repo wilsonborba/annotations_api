@@ -8,6 +8,7 @@
 - *(schemas)* Store stroke samples as integer columns (#19)
 - *(domain)* Validate editor placement rules with shared rule fixtures (#20)
 - *(domain)* Let ink-only groups overlap like free ink (#20)
+- *(domain)* Save note revisions with crash-safe reconciliation (#21)
 
 ### 💼 Other
 

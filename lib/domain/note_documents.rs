@@ -202,6 +202,20 @@ pub async fn validate_document(
     body: &Value,
     limits: &NoteLimits,
 ) -> R<i64> {
+    validate_document_files(store, name, version, files, body, limits)
+        .await
+        .map(|(version, _)| version)
+}
+
+/// Like `validate_document`, and also return the file references of the document.
+pub async fn validate_document_files(
+    store: &Store,
+    name: &str,
+    version: Option<i64>,
+    files: FileScope<'_>,
+    body: &Value,
+    limits: &NoteLimits,
+) -> R<(i64, Vec<FileRef>)> {
     let family =
         Family::parse(name).ok_or_else(|| DocumentError::new("unsupported_schema_version", ""))?;
     let (version, fields) = schemas::published_fields(store, name, version)
@@ -249,7 +263,7 @@ pub async fn validate_document(
             }
         }
     }
-    Ok(version)
+    Ok((version, refs))
 }
 
 /// Pure structural validation of one document. Returns the file references to check.
