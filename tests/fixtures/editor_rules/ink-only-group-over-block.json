@@ -1,0 +1,90 @@
+{
+  "description": "A group of only ink and shapes lies over a block; it behaves like free ink",
+  "rule_id": "free_ink_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 200,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            5000,
+            25000
+          ],
+          "y": [
+            5000,
+            15000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 5000,
+            "y": 5000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 25000,
+            "y": 15000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 150,
+          "y": 100
+        },
+        "radius": 60
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "s1",
+          "h1"
+        ]
+      }
+    ]
+  },
+  "expected": "valid"
+}

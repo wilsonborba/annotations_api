@@ -1,0 +1,71 @@
+{
+  "description": "A group of a block and a shape whose rectangle reaches into another block is rejected",
+  "rule_id": "group_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 220,
+          "y": 50
+        },
+        "radius": 40
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "h1"
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 250,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "group_overlap",
+    "items": [
+      "g1",
+      "t2"
+    ]
+  }
+}

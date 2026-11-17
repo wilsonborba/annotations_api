@@ -38,8 +38,8 @@ File references are not checked here: the document schema fixtures
 | `rule_id` | Rule | Codes |
 | --- | --- | --- |
 | `block_overlap` | Two structured blocks must not overlap. | `block_overlap` |
-| `group_overlap` | A group collides with the outside rectangle of all its members. | `group_overlap` |
-| `free_ink_overlap` | Free strokes and shapes may overlap anything. Valid cases only. | none |
+| `group_overlap` | A group that contains a structured block collides with the outside rectangle of all its members. | `group_overlap` |
+| `free_ink_overlap` | Free strokes, shapes and ink-only groups may overlap anything. Valid cases only. | none |
 | `page_bounds` | Items stay inside the page width and at or below the page top. | `out_of_bounds` |
 | `operation` | The operation is well formed and names existing items. | `invalid_operation`, `missing_item`, `immutable_field` |
 | `document_schema` | The result passes the note document schema. | every document schema code |
@@ -64,10 +64,13 @@ Structured blocks: `text`, `image`, `file_card`, `link_card`, `website_card`,
 
 ### Collision units
 
-- Top level: every structured block and every group that is not a member of a group.
-  Free strokes and shapes are not units.
-- Inside each group: its direct structured members and nested groups. Ink members
-  only make the group rectangle larger.
+- A structured group is a group that contains a structured block, directly or in a
+  nested group. A group of only strokes and shapes (an ink-only group) behaves like
+  free ink: it is never a unit and overlaps anything.
+- Top level: every structured block and every structured group that is not a member
+  of a group. Free strokes, shapes and ink-only groups are not units.
+- Inside each group: its direct structured members and nested structured groups.
+  Ink members and nested ink-only groups only make the group rectangle larger.
 - Units of one level are compared in pairs, in document order: first unit 0 with
   1, 2, ..., then unit 1 with 2, 3, .... The top level comes first, then the groups
   in document order. The first overlapping pair is the error.

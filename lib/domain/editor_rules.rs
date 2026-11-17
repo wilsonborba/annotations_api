@@ -5,8 +5,10 @@
 //! stores the block size that its text engine measured. Rules:
 //! - `block_overlap`: two structured blocks must not overlap. An overlap is an
 //!   intersection with a positive area, so shared edges are allowed.
-//! - `group_overlap`: a group collides with the outside rectangle of all its members.
-//! - `free_ink_overlap`: free strokes and shapes may overlap anything.
+//! - `group_overlap`: a group that contains a structured block collides with the
+//!   outside rectangle of all its members. A group of free ink and shapes only
+//!   behaves like free ink.
+//! - `free_ink_overlap`: free strokes, shapes and ink-only groups may overlap anything.
 //! - `page_bounds`: items stay inside the page width, at or below the page top.
 //!
 //! An operation is applied to a working copy first. The whole operation is then
@@ -348,7 +350,13 @@ pub fn check_placement(document: &Value) -> R<()> {
     for i in 0..items.len() {
         rect(items, &members, &mut rects, i, 0);
     }
-    let collides = |i: &usize| role(&items[*i]) != Role::Ink;
+    // A group collides only when it contains a structured block (at any depth). A
+    // group of free ink and shapes only behaves like free ink.
+    let mut structured: Vec<Option<bool>> = vec![None; items.len()];
+    for i in 0..items.len() {
+        has_block(items, &members, &mut structured, i, 0);
+    }
+    let collides = |i: &usize| role(&items[*i]) != Role::Ink && structured[*i] == Some(true);
     let top: Vec<usize> = (0..items.len())
         .filter(|i| !grouped[*i] && collides(i))
         .collect();
@@ -386,6 +394,30 @@ fn check_level(
         }
     }
     Ok(())
+}
+
+/// Whether an item is a structured block or a group that contains one. Cached.
+fn has_block(
+    items: &[Value],
+    members: &HashMap<usize, Vec<usize>>,
+    cache: &mut Vec<Option<bool>>,
+    i: usize,
+    depth: usize,
+) -> bool {
+    if let Some(v) = cache[i] {
+        return v;
+    }
+    let v = match items[i]["kind"].as_str() {
+        Some("stroke" | "shape") => false,
+        Some("group") if depth <= items.len() => members.get(&i).is_some_and(|list| {
+            list.iter()
+                .any(|m| has_block(items, members, cache, *m, depth + 1))
+        }),
+        Some("group") => false,
+        _ => true,
+    };
+    cache[i] = Some(v);
+    v
 }
 
 /// The rectangle of an item: block geometry, every stored point of ink, or the

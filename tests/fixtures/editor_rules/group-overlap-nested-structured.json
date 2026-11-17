@@ -1,0 +1,144 @@
+{
+  "description": "A group whose only block sits in a nested group still collides",
+  "rule_id": "group_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            2000,
+            18000
+          ],
+          "y": [
+            9000,
+            9000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 2000,
+            "y": 9000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 18000,
+            "y": 9000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "s1"
+        ]
+      },
+      {
+        "id": "s2",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            10000,
+            35000
+          ],
+          "y": [
+            5000,
+            5000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 10000,
+            "y": 5000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 35000,
+            "y": 5000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "g2",
+        "kind": "group",
+        "members": [
+          "g1",
+          "s2"
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 300,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "group_overlap",
+    "items": [
+      "g2",
+      "t2"
+    ]
+  }
+}

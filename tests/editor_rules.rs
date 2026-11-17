@@ -189,6 +189,8 @@ fn fixtures_cover_every_rule_kind_and_operation() {
         "group-overlap-grouping-creates-conflict",
         "page-bounds-block-too-wide",
         "block-overlap-op-add",
+        "ink-only-group-over-block",
+        "group-overlap-mixed-shape-member",
     ] {
         if !all.iter().any(|(f, _)| f == &format!("{name}.json")) {
             missing.push(name.to_string());
