@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 14] = [
+const V2_TABLES: [&str; 17] = [
     "authors",
     "notes",
     "note_revisions",
@@ -19,6 +19,9 @@ const V2_TABLES: [&str; 14] = [
     "files",
     "file_references",
     "pending_operations",
+    "note_save_operations",
+    "note_save_revisions",
+    "note_revision_cleanup",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
@@ -134,6 +137,7 @@ async fn schema_has_no_json_array_or_body_columns() {
         include_str!("../migrations/006_v2_projects_tags.sql"),
         include_str!("../migrations/007_v2_files_operations.sql"),
         include_str!("sqlite/005_v2_note_changes.sql"),
+        include_str!("sqlite/008_v2_save_operations.sql"),
     ];
     for text in migrations {
         let lower = text.to_lowercase();
@@ -269,8 +273,84 @@ async fn check_constraints_reject_unknown_values() {
         .is_err(),
         "one author per owner"
     );
-    run(db, "INSERT INTO pending_operations(operation_id,owner_id,state,created_at) VALUES('op1','u1','prepared',1)").await.unwrap();
-    assert!(run(db, "INSERT INTO pending_operations(operation_id,owner_id,state,created_at) VALUES('op1','u1','prepared',1)").await.is_err());
+    assert!(run(db, "INSERT INTO pending_operations(operation_id,owner_id,state,created_at) VALUES('op1','u1','prepared',1)").await.is_err(), "state value list");
+    run(db, "INSERT INTO pending_operations(operation_id,owner_id,state,created_at) VALUES('op1','u1','started',1)").await.unwrap();
+    assert!(run(db, "INSERT INTO pending_operations(operation_id,owner_id,state,created_at) VALUES('op1','u1','started',1)").await.is_err());
+    for state in ["abandoned", "failed", "started", "done"] {
+        run(
+            db,
+            &format!("UPDATE pending_operations SET state='{state}' WHERE operation_id='op1'"),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(
+        run(
+            db,
+            "UPDATE pending_operations SET state='committed' WHERE operation_id='op1'"
+        )
+        .await
+        .is_err()
+    );
+    let hash = "b".repeat(64);
+    assert!(run(db, "INSERT INTO note_save_operations(operation_id,note_id,request_hash,updated_at) VALUES('op1','n1','short',1)").await.is_err());
+    assert!(run(db, &format!("INSERT INTO note_save_operations(operation_id,note_id,request_hash,updated_at) VALUES('missing','n1','{hash}',1)")).await.is_err(), "detail rows need their operation");
+    run(db, &format!("INSERT INTO note_save_operations(operation_id,note_id,request_hash,updated_at) VALUES('op1','n1','{hash}',1)")).await.unwrap();
+    assert!(
+        run(
+            db,
+            "UPDATE note_save_operations SET result_revision=0 WHERE operation_id='op1'"
+        )
+        .await
+        .is_err()
+    );
+    assert!(run(db, "INSERT INTO note_save_revisions(operation_id,representation,revision_id,document_id) VALUES('op1','summary','r1','d1')").await.is_err());
+    run(db, "INSERT INTO note_save_revisions(operation_id,representation,revision_id,document_id) VALUES('op1','original','r1','d1')").await.unwrap();
+    assert!(run(db, "INSERT INTO note_save_revisions(operation_id,representation,revision_id,document_id) VALUES('op1','typed','r2','d1')").await.is_err(), "one document per revision");
+    run(
+        db,
+        "DELETE FROM pending_operations WHERE operation_id='op1'",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        count(db, "SELECT COUNT(*) FROM note_save_revisions").await,
+        0
+    );
+}
+
+#[test]
+fn sqlite_save_operations_equivalent_differs_only_in_state_value_list() {
+    let postgres = include_str!("../migrations/008_v2_save_operations.sql");
+    let sqlite = include_str!("sqlite/008_v2_save_operations.sql");
+    fn body<'a>(text: &'a str, marker: &str) -> Vec<&'a str> {
+        text.lines()
+            .filter(|line| !line.starts_with("--") && !line.contains(marker))
+            .collect()
+    }
+    assert_eq!(
+        body(postgres, "pending_operations_state_values"),
+        body(sqlite, "pending_operations_state_")
+    );
+    let values = "state IN ('started','abandoned','done','failed')";
+    assert!(postgres.contains(&format!("CHECK({values})")));
+    assert_eq!(
+        sqlite
+            .matches("NOT IN ('started','abandoned','done','failed')")
+            .count(),
+        2
+    );
+    // The only ALTER statements replace the named state CHECK; no data is dropped.
+    let alters: Vec<&str> = postgres
+        .lines()
+        .filter(|l| l.to_lowercase().contains("alter ") || l.to_lowercase().contains("drop "))
+        .collect();
+    assert_eq!(alters.len(), 2);
+    assert!(
+        alters
+            .iter()
+            .all(|l| l.starts_with("ALTER TABLE pending_operations ") && l.contains("CONSTRAINT"))
+    );
 }
 
 #[tokio::test]

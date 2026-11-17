@@ -49,6 +49,43 @@ impl Documents {
         }
         Ok(())
     }
+    /// Insert immutable revision content. An identical retry is safe after an
+    /// uncertain response; different content never overwrites the document.
+    pub async fn put_immutable(&self, id: &str, body: &Value) -> Result<()> {
+        match self {
+            Self::Memory(m) => {
+                let mut docs = m.lock().unwrap();
+                if let Some(existing) = docs.get(id) {
+                    if existing != body {
+                        return Err(Error::unavailable());
+                    }
+                } else {
+                    docs.insert(id.into(), body.clone());
+                }
+                Ok(())
+            }
+            Self::Remote { .. } => {
+                let response = self
+                    .request(reqwest::Method::PUT, id)
+                    .json(body)
+                    .send()
+                    .await?;
+                if response.status() == reqwest::StatusCode::CONFLICT {
+                    let mut existing = self.get(id).await?;
+                    if let Some(object) = existing.as_object_mut() {
+                        object.remove("_id");
+                        object.remove("_rev");
+                    }
+                    if existing != *body {
+                        return Err(Error::unavailable());
+                    }
+                } else {
+                    response.error_for_status()?;
+                }
+                Ok(())
+            }
+        }
+    }
     pub async fn get(&self, id: &str) -> Result<Value> {
         match self {
             Self::Memory(m) => m
