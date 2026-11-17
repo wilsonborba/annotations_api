@@ -1,0 +1,194 @@
+{
+  "description": "Every kind allowed in Instant",
+  "family": "instant-room",
+  "schema_version": 1,
+  "files": [
+    "room-file-1",
+    "room-file-2"
+  ],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "grid",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 120,
+        "spans": [
+          {
+            "text": "Photosynthesis "
+          },
+          {
+            "text": "needs light",
+            "bold": true,
+            "italic": true,
+            "strikethrough": false,
+            "color": "#1E40AFFF",
+            "size": 18
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": [
+          {
+            "x": 100,
+            "y": 300,
+            "t": 0,
+            "pressure": 0.5,
+            "tilt": 0.6
+          },
+          {
+            "x": 104,
+            "y": 303,
+            "t": 8,
+            "pressure": 0.5,
+            "tilt": 0.6
+          },
+          {
+            "x": 108,
+            "y": 300,
+            "t": 16,
+            "pressure": 0.5,
+            "tilt": 0.6
+          },
+          {
+            "x": 112,
+            "y": 303,
+            "t": 24,
+            "pressure": 0.5,
+            "tilt": 0.6
+          },
+          {
+            "x": 116,
+            "y": 300,
+            "t": 32,
+            "pressure": 0.5,
+            "tilt": 0.6
+          }
+        ],
+        "nodes": [
+          {
+            "x": 100,
+            "y": 300,
+            "out": {
+              "x": 106,
+              "y": 298
+            },
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 116,
+            "y": 300,
+            "in": {
+              "x": 110,
+              "y": 300
+            },
+            "mode": "independent",
+            "corner": true,
+            "sample": 4
+          }
+        ]
+      },
+      {
+        "id": "sh1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#DC2626FF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 200,
+          "y": 200
+        },
+        "radius": 50
+      },
+      {
+        "id": "i1",
+        "kind": "image",
+        "x": 40,
+        "y": 300,
+        "width": 300,
+        "height": 120,
+        "file_id": "room-file-1"
+      },
+      {
+        "id": "f1",
+        "kind": "file_card",
+        "x": 40,
+        "y": 500,
+        "width": 300,
+        "height": 120,
+        "file_id": "room-file-2"
+      },
+      {
+        "id": "l1",
+        "kind": "link_card",
+        "x": 40,
+        "y": 700,
+        "width": 300,
+        "height": 120,
+        "url": "https://example.org/article",
+        "title": "An article",
+        "site_name": "Example"
+      },
+      {
+        "id": "w1",
+        "kind": "website_card",
+        "x": 40,
+        "y": 900,
+        "width": 300,
+        "height": 120,
+        "url": "https://example.org/"
+      },
+      {
+        "id": "y1",
+        "kind": "youtube_card",
+        "x": 40,
+        "y": 1100,
+        "width": 300,
+        "height": 120,
+        "url": "https://youtu.be/dQw4w9WgXcQ"
+      },
+      {
+        "id": "r1",
+        "kind": "reports_embed",
+        "x": 40,
+        "y": 1300,
+        "width": 300,
+        "height": 120,
+        "report_id": "report-42",
+        "mode": "live",
+        "source": "link"
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "s1"
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}

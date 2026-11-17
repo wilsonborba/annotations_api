@@ -9,6 +9,27 @@ use serde_json::json;
 pub const ROOM_SECONDS: i64 = 900;
 pub const UPLOAD_BYTES: i64 = 50_000_000;
 pub const CACHE_SECONDS: u64 = 120;
+
+/// Limits for v2 note documents (`note-original`, `note-typed`, `instant-room`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoteLimits {
+    /// Items in one document, nested ink of typed handwriting blocks included.
+    pub max_items: usize,
+    /// Raw input samples in one stroke.
+    pub max_samples_per_stroke: usize,
+    /// Editable nodes in one stroke or shape path.
+    pub max_nodes_per_stroke: usize,
+    /// Size of the serialized document body in bytes.
+    pub max_document_bytes: usize,
+}
+/// Default note limits. The document byte limit stays below the CouchDB 3 default
+/// `max_document_size` (8,000,000 bytes) and leaves room for the stored envelope.
+pub const NOTE_LIMITS: NoteLimits = NoteLimits {
+    max_items: 10_000,
+    max_samples_per_stroke: 10_000,
+    max_nodes_per_stroke: 1_000,
+    max_document_bytes: 7_500_000,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,

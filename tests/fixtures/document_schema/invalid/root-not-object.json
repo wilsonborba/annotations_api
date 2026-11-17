@@ -1,0 +1,19 @@
+{
+  "description": "Body is an array",
+  "family": "note-original",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": [],
+  "expect": {
+    "valid": false,
+    "code": "invalid_type",
+    "path": ""
+  }
+}

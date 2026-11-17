@@ -1,0 +1,45 @@
+{
+  "description": "Table rows with different cell counts",
+  "family": "note-typed",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "blocks": [
+      {
+        "id": "k1",
+        "kind": "table",
+        "rows": [
+          {
+            "cells": [
+              {
+                "spans": []
+              },
+              {
+                "spans": []
+              }
+            ]
+          },
+          {
+            "cells": [
+              {
+                "spans": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "valid": false,
+    "code": "invalid_count",
+    "path": "blocks[0].rows[1].cells"
+  }
+}

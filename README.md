@@ -22,6 +22,18 @@ validated body. Interface language is independent of content language. Additiona
 language catalog entries are possible without a schema change. Normal accounts
 cannot publish in this release. No frontend editor or administration UI exists.
 
+## v2 note documents
+
+The families `note-original`, `note-typed` and `instant-room` are registered as schema
+versions through the admin schema routes (payloads in `tests/fixtures/document_schema/families/`).
+`lib/domain/note_documents.rs` validates every nested item before a document write:
+required fields, allowed kinds and variants, unique ids, finite numbers, page bounds,
+group members, group cycles and managed file ids of the owner. Unknown kinds or fields
+are rejected with a stable error code. A registry entry alone cannot add a version:
+drafting a note family version without validator code is rejected. Limits are in
+`lib/core` (`NOTE_LIMITS`). Canonical cases and the case format are in
+`tests/fixtures/document_schema/`.
+
 ## Setup and operations
 
 1. Create the dedicated PostgreSQL database `asodya_annotations` and a least-privilege

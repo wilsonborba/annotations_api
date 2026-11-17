@@ -1,0 +1,19 @@
+{
+  "description": "Number out of the finite range",
+  "family": "note-original",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document_text": "{\"page\":{\"width\":1e999,\"background\":{\"kind\":\"blank\"}},\"items\":[]}",
+  "expect": {
+    "valid": false,
+    "code": "non_finite_number",
+    "path": ""
+  }
+}

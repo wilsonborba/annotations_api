@@ -1,0 +1,63 @@
+{
+  "description": "Typed table block",
+  "family": "note-typed",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "blocks": [
+      {
+        "id": "k1",
+        "kind": "table",
+        "header": true,
+        "rows": [
+          {
+            "cells": [
+              {
+                "spans": [
+                  {
+                    "text": "Name"
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "text": "Value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "cells": [
+              {
+                "spans": [
+                  {
+                    "text": "pH"
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "text": "7"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "description": "Reports uploads need an account",
+  "family": "instant-room",
+  "schema_version": 1,
+  "files": [],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "ruled",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "b1",
+        "kind": "reports_embed",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 120,
+        "report_id": "report-42",
+        "mode": "live",
+        "source": "upload"
+      }
+    ]
+  },
+  "expect": {
+    "valid": false,
+    "code": "kind_not_allowed",
+    "path": "items[0].source"
+  }
+}

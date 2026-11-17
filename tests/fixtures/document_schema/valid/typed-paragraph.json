@@ -1,0 +1,37 @@
+{
+  "description": "Typed paragraph block",
+  "family": "note-typed",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "blocks": [
+      {
+        "id": "k1",
+        "kind": "paragraph",
+        "spans": [
+          {
+            "text": "Photosynthesis "
+          },
+          {
+            "text": "needs light",
+            "bold": true,
+            "italic": true,
+            "strikethrough": false,
+            "color": "#1E40AFFF",
+            "size": 18
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}
