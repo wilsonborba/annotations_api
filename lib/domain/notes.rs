@@ -229,7 +229,7 @@ fn document_input(
     })
 }
 
-fn clean_text(value: &str, field: &str, max_chars: usize) -> R<String> {
+pub(crate) fn clean_text(value: &str, field: &str, max_chars: usize) -> R<String> {
     let text = value.trim();
     if text.chars().any(char::is_control) {
         return Err(NoteError::invalid(
@@ -446,7 +446,7 @@ pub struct ListQuery {
     pub sync_cursor: Option<String>,
 }
 
-fn page_limit(raw: Option<&str>) -> R<i64> {
+pub(crate) fn page_limit(raw: Option<&str>) -> R<i64> {
     let limits = NOTE_API_LIMITS;
     match raw {
         None => Ok(limits.default_page),

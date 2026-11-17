@@ -7,7 +7,7 @@ use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005 and 008 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 10] = [
+pub const SQLITE_MIGRATIONS: [&str; 11] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -18,6 +18,7 @@ pub const SQLITE_MIGRATIONS: [&str; 10] = [
     include_str!("../../tests/sqlite/008_v2_save_operations.sql"),
     include_str!("../../migrations/009_v2_note_titles.sql"),
     include_str!("../../migrations/010_v2_publication_titles.sql"),
+    include_str!("../../migrations/011_v2_project_listing.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {

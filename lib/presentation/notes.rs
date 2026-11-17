@@ -74,7 +74,7 @@ fn publication_if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
     })
 }
 
-fn if_match_from(headers: &HeaderMap, min: i64) -> Result<i64, NoteError> {
+pub(crate) fn if_match_from(headers: &HeaderMap, min: i64) -> Result<i64, NoteError> {
     let raw = headers
         .get(header::IF_MATCH)
         .ok_or_else(NoteError::if_match_required)?
@@ -98,7 +98,7 @@ fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// A JSON answer with the note revision as its ETag.
-fn tagged(status: StatusCode, body: Value, revision: i64) -> Response {
+pub(crate) fn tagged(status: StatusCode, body: Value, revision: i64) -> Response {
     let mut response = (status, Json(body)).into_response();
     if let Ok(value) = HeaderValue::from_str(&format!("\"{revision}\"")) {
         response.headers_mut().insert(header::ETAG, value);

@@ -62,6 +62,8 @@ pub struct NoteApiLimits {
     pub max_tag_chars: usize,
     /// Projects named in one create request.
     pub max_projects: usize,
+    /// Characters in a project name.
+    pub max_project_name_chars: usize,
     /// List page size when the request gives no limit.
     pub default_page: i64,
     /// Largest list page size and largest sync batch.
@@ -73,6 +75,7 @@ pub const NOTE_API_LIMITS: NoteApiLimits = NoteApiLimits {
     max_tags: 20,
     max_tag_chars: 50,
     max_projects: 50,
+    max_project_name_chars: 100,
     default_page: 50,
     max_page: 100,
 };
