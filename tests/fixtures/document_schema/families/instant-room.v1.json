@@ -1,0 +1,13 @@
+{
+  "name": "instant-room",
+  "version": 1,
+  "fields": [
+    {"path": "page", "field_type": "object", "required": true},
+    {"path": "page.width", "field_type": "number", "required": true},
+    {"path": "page.background", "field_type": "object", "required": true},
+    {"path": "page.background.kind", "field_type": "string", "required": true},
+    {"path": "items", "field_type": "array", "required": true},
+    {"path": "items[].id", "field_type": "string", "required": false},
+    {"path": "items[].kind", "field_type": "string", "required": false}
+  ]
+}

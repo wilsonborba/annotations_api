@@ -1,0 +1,25 @@
+{
+  "description": "Typed pdf_preview block (no grid position)",
+  "family": "note-typed",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "blocks": [
+      {
+        "id": "k1",
+        "kind": "pdf_preview",
+        "file_id": "file-pdf-1"
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}

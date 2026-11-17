@@ -1,0 +1,9 @@
+{
+  "name": "note-typed",
+  "version": 1,
+  "fields": [
+    {"path": "blocks", "field_type": "array", "required": true},
+    {"path": "blocks[].id", "field_type": "string", "required": false},
+    {"path": "blocks[].kind", "field_type": "string", "required": false}
+  ]
+}

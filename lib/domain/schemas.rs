@@ -1,6 +1,7 @@
 use crate::{
     core::{Error, Result, slug},
     dal::Store,
+    domain::note_documents::Family,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +27,13 @@ pub async fn draft(store: &Store, input: Draft) -> Result<Value> {
     if !slug(&input.name) || input.version < 1 || input.fields.is_empty() {
         return Err(Error::bad(
             "A name, positive version and fields are required",
+        ));
+    }
+    if let Some(family) = Family::parse(&input.name)
+        && !family.supports(input.version)
+    {
+        return Err(Error::bad(
+            "No validator exists for this note schema version",
         ));
     }
     let mut paths = std::collections::HashSet::new();
@@ -108,42 +116,63 @@ fn values_at<'a>(value: &'a Value, path: &str) -> Vec<&'a Value> {
     }
     values
 }
-pub async fn validate(
+/// A registered field row: path, type and required flag.
+pub struct FieldRow {
+    pub path: String,
+    pub field_type: String,
+    pub required: bool,
+}
+/// Load the fields of a published schema version (the default one when `version` is None).
+pub async fn published_fields(
     store: &Store,
     name: &str,
     version: Option<i64>,
-    body: &Value,
-) -> Result<i64> {
+) -> Result<(i64, Vec<FieldRow>)> {
     let row=if let Some(v)=version{sqlx::query("SELECT version FROM schema_versions WHERE name=$1 AND version=$2 AND status='published'").bind(name).bind(v).fetch_optional(&store.db).await?}
  else{sqlx::query("SELECT version FROM schema_versions WHERE name=$1 AND is_default=1 AND status='published'").bind(name).fetch_optional(&store.db).await?}.ok_or_else(||Error::bad("A registered published schema version is required"))?;
     let version = row.get::<i64, _>("version");
     let fields=sqlx::query("SELECT path,field_type,required FROM schema_fields WHERE schema_name=$1 AND schema_version=$2").bind(name).bind(version).fetch_all(&store.db).await?;
-    let roots: std::collections::HashSet<String> = fields
+    Ok((
+        version,
+        fields
+            .into_iter()
+            .map(|r| FieldRow {
+                path: r.get("path"),
+                field_type: r.get("field_type"),
+                required: r.get::<i64, _>("required") == 1,
+            })
+            .collect(),
+    ))
+}
+/// Check registered root names, required paths and basic types.
+/// Errors give a stable code and the path.
+pub fn check_fields(
+    fields: &[FieldRow],
+    body: &Value,
+) -> std::result::Result<(), (&'static str, String)> {
+    let roots: std::collections::HashSet<&str> = fields
         .iter()
         .map(|r| {
-            r.get::<String, _>("path")
+            r.path
                 .split('.')
                 .next()
                 .unwrap_or("")
                 .trim_end_matches("[]")
-                .to_string()
         })
         .collect();
     let object = body
         .as_object()
-        .ok_or_else(|| Error::bad("Document body must be an object"))?;
-    if object.keys().any(|k| !roots.contains(k)) {
-        return Err(Error::bad("Document contains an unregistered root field"));
+        .ok_or_else(|| ("invalid_type", String::new()))?;
+    if let Some(k) = object.keys().find(|k| !roots.contains(k.as_str())) {
+        return Err(("unknown_field", k.clone()));
     }
     for field in fields {
-        let path = field.get::<String, _>("path");
-        let values = values_at(body, &path);
-        let typ = field.get::<String, _>("field_type");
-        if values.is_empty() && field.get::<i64, _>("required") == 1 {
-            return Err(Error::bad(format!("Missing required field: {path}")));
+        let values = values_at(body, &field.path);
+        if values.is_empty() && field.required {
+            return Err(("missing_field", field.path.clone()));
         }
         for value in values {
-            let valid = match typ.as_str() {
+            let valid = match field.field_type.as_str() {
                 "string" => value.is_string(),
                 "number" => value.is_number(),
                 "integer" => value.is_i64() || value.is_u64(),
@@ -153,10 +182,31 @@ pub async fn validate(
                 _ => false,
             };
             if !valid {
-                return Err(Error::bad(format!("Invalid type for {path}")));
+                return Err(("invalid_type", field.path.clone()));
             }
         }
     }
+    Ok(())
+}
+/// Validate an MVP article body. Note document families use `note_documents`.
+pub async fn validate(
+    store: &Store,
+    name: &str,
+    version: Option<i64>,
+    body: &Value,
+) -> Result<i64> {
+    if Family::parse(name).is_some() {
+        return Err(Error::bad(
+            "Note documents are validated by the note document validator",
+        ));
+    }
+    let (version, fields) = published_fields(store, name, version).await?;
+    check_fields(&fields, body).map_err(|(code, path)| match code {
+        "unknown_field" => Error::bad("Document contains an unregistered root field"),
+        "missing_field" => Error::bad(format!("Missing required field: {path}")),
+        _ if path.is_empty() => Error::bad("Document body must be an object"),
+        _ => Error::bad(format!("Invalid type for {path}")),
+    })?;
     validate_blocks(body)?;
     Ok(version)
 }

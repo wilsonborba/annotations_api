@@ -1,0 +1,64 @@
+{
+  "description": "Node links to a missing sample",
+  "family": "note-original",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "ruled",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": [
+          {
+            "x": 100,
+            "y": 300,
+            "t": 0,
+            "pressure": 0.5,
+            "tilt": 0.6
+          },
+          {
+            "x": 104,
+            "y": 303,
+            "t": 8,
+            "pressure": 0.5,
+            "tilt": 0.6
+          }
+        ],
+        "nodes": [
+          {
+            "x": 100,
+            "y": 300,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 5
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "valid": false,
+    "code": "out_of_range",
+    "path": "items[0].nodes[0].sample"
+  }
+}

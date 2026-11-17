@@ -1,0 +1,37 @@
+{
+  "description": "csv_table block",
+  "family": "note-original",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "ruled",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "b1",
+        "kind": "csv_table",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 120,
+        "file_id": "file-csv-1"
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}

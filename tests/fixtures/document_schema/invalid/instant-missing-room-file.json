@@ -1,0 +1,34 @@
+{
+  "description": "Owner file is not a file of this room",
+  "family": "instant-room",
+  "schema_version": 1,
+  "files": [
+    "room-file-1"
+  ],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "ruled",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "b1",
+        "kind": "image",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 120,
+        "file_id": "file-image-1"
+      }
+    ]
+  },
+  "expect": {
+    "valid": false,
+    "code": "missing_file",
+    "path": "items[0].file_id"
+  }
+}

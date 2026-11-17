@@ -1,5 +1,6 @@
 pub mod links;
 pub mod names;
+pub mod note_documents;
 pub mod posts;
 pub mod rooms;
 pub mod schemas;
