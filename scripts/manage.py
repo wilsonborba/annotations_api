@@ -38,7 +38,9 @@ def migrate(config,apply):
             raise SystemExit('SQLite migrations require an explicit isolated /tmp test target.')
         with sqlite3.connect(path) as conn:
             conn.execute('PRAGMA foreign_keys=ON')
-            for file in files:conn.executescript(file.read_text())
+            for file in files:
+                equivalent=ROOT/'tests'/'sqlite'/file.name
+                conn.executescript((equivalent if equivalent.is_file() else file).read_text())
         return
     if target.scheme not in ('postgres','postgresql') or name!='asodya_annotations':
         raise SystemExit('Refusing schema migration: expected the dedicated asodya_annotations PostgreSQL database.')
