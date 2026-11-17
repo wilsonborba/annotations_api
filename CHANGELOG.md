@@ -11,6 +11,7 @@
 - *(domain)* Save note revisions with crash-safe reconciliation (#21)
 - *(notes)* Add the owner working-copy API with manual sync, conflicts and account binding (#22)
 - *(notes)* Publish Original, Typed or both as independent public snapshots (#23)
+- *(projects)* Add owner projects, note memberships and the public project projection (#24)
 
 ### 💼 Other
 
