@@ -91,6 +91,18 @@ pub enum Target {
     /// Change a note of the caller. `if_match` is the expected note revision.
     Update { note_id: String, if_match: i64 },
 }
+/// Note metadata saved with the same commit as the representations. Every field
+/// is optional: an absent field keeps its stored value. Values are already
+/// validated by the caller (`notes`): trimmed title, normalized unique tags.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Metadata {
+    /// `Some("")` removes the title.
+    pub title: Option<String>,
+    /// The complete tag list (display names). `Some(vec![])` removes every tag.
+    pub tags: Option<Vec<String>>,
+    /// Projects of the caller that a new note joins. Create only.
+    pub project_ids: Option<Vec<String>>,
+}
 /// One save. `owner_id` comes from the gateway identity, never from the body.
 /// `operation_key` is the Idempotency-Key header value.
 #[derive(Clone, Debug)]
@@ -99,6 +111,8 @@ pub struct SaveRequest {
     pub operation_key: String,
     pub target: Target,
     pub representations: Vec<RepresentationInput>,
+    /// Metadata to save with this revision. An update may change only metadata.
+    pub metadata: Option<Metadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -132,6 +146,8 @@ pub enum SaveError {
     NoteExists { note_id: String },
     /// The note does not exist or belongs to another owner (404).
     NotFound,
+    /// A named project does not exist or belongs to another owner (422).
+    UnknownProject,
     /// A store is unavailable (503). The save is not reported as done.
     Unavailable,
 }
@@ -139,7 +155,9 @@ impl SaveError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Invalid(e) => e.0,
-            Self::InvalidRequest(_) | Self::OperationReused => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::InvalidRequest(_) | Self::OperationReused | Self::UnknownProject => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::OperationInProgress | Self::Conflict { .. } | Self::NoteExists { .. } => {
                 StatusCode::CONFLICT
             }
@@ -156,6 +174,7 @@ impl SaveError {
             Self::Conflict { .. } => "revision_conflict",
             Self::NoteExists { .. } => "note_exists",
             Self::NotFound => "not_found",
+            Self::UnknownProject => "unknown_project",
             Self::Unavailable => "storage_unavailable",
         }
     }
@@ -198,7 +217,8 @@ impl From<SaveError> for Error {
                 "invalid_client_note_id" => {
                     "The client note id uses 1 to 128 visible ASCII characters"
                 }
-                "empty_save" => "A save needs at least one representation",
+                "empty_save" => "A save needs a representation or a metadata change",
+                "projects_on_update" => "Project memberships change through the project routes",
                 "duplicate_representation" => "Each representation appears once",
                 "main_representation_missing" => "A new note needs its main representation",
                 "missing_base" => "An operation needs a saved current revision",
@@ -214,6 +234,7 @@ impl From<SaveError> for Error {
             SaveError::Conflict { .. } => "The note changed since the given revision",
             SaveError::NoteExists { .. } => "A note with this client note id exists",
             SaveError::NotFound => "",
+            SaveError::UnknownProject => "A project does not exist for this owner",
             SaveError::Unavailable => "",
         };
         let status = e.status();
@@ -254,6 +275,7 @@ pub struct Pending {
     note_id: String,
     target: Target,
     items: Vec<Prepared>,
+    metadata: Option<Metadata>,
 }
 /// The outcome of step (a).
 #[derive(Debug)]
@@ -361,6 +383,7 @@ impl Pending {
                 note_id: found.note_id,
                 target: request.target.clone(),
                 items,
+                metadata: request.metadata.clone(),
             }));
         }
         let note_id = match &request.target {
@@ -415,6 +438,7 @@ impl Pending {
             note_id,
             target: request.target.clone(),
             items,
+            metadata: request.metadata.clone(),
         }))
     }
 
@@ -573,6 +597,9 @@ impl Pending {
                     return Err(DocumentError::new("missing_file", file.path.clone()).into());
                 }
             }
+        }
+        if let Some(metadata) = &self.metadata {
+            save_metadata(&mut tx, &self.note_id, &self.owner_id, metadata).await?;
         }
         sqlx::query(
             "INSERT INTO note_changes(owner_id,note_id,change_kind,changed_at) VALUES($1,$2,'upsert',$3)",
@@ -942,7 +969,12 @@ fn check_shape(request: &SaveRequest) -> R<()> {
     if request.owner_id.is_empty() {
         return Err(SaveError::NotFound);
     }
-    if request.representations.is_empty() {
+    let metadata_only = matches!(request.target, Target::Update { .. })
+        && request
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.title.is_some() || m.tags.is_some() || m.project_ids.is_some());
+    if request.representations.is_empty() && !metadata_only {
         return Err(SaveError::InvalidRequest("empty_save"));
     }
     let mut seen: Vec<Representation> = request
@@ -977,6 +1009,13 @@ fn check_shape(request: &SaveRequest) -> R<()> {
         Target::Update { note_id, .. } => {
             if note_id.is_empty() {
                 return Err(SaveError::NotFound);
+            }
+            if request
+                .metadata
+                .as_ref()
+                .is_some_and(|m| m.project_ids.is_some())
+            {
+                return Err(SaveError::InvalidRequest("projects_on_update"));
             }
         }
     }
@@ -1013,6 +1052,15 @@ async fn prepare(
                     note_id: row.get("note_id"),
                 });
             }
+        }
+    }
+    for project_id in request
+        .metadata
+        .iter()
+        .flat_map(|m| m.project_ids.iter().flatten())
+    {
+        if !owns_project(&store.db, project_id, owner).await? {
+            return Err(SaveError::UnknownProject);
         }
     }
     let mut items = vec![];
@@ -1117,12 +1165,85 @@ fn request_hash(request: &SaveRequest) -> String {
             json!({"representation": r.representation.as_str(), "schema_version": r.schema_version, kind: content})
         })
         .collect();
+    let mut hashed = json!({"target": target, "representations": representations});
+    // Saves without metadata keep the hash of the earlier request format.
+    if let Some(m) = &request.metadata {
+        hashed["metadata"] =
+            json!({"title": m.title, "tags": m.tags, "project_ids": m.project_ids});
+    }
     let mut text = String::new();
-    canonical(
-        &json!({"target": target, "representations": representations}),
-        &mut text,
-    );
+    canonical(&hashed, &mut text);
     sha_hex(text.as_bytes())
+}
+
+async fn owns_project<'e, E>(db: E, project_id: &str, owner_id: &str) -> R<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Any>,
+{
+    Ok(
+        sqlx::query("SELECT project_id FROM projects WHERE project_id=$1 AND owner_id=$2")
+            .bind(project_id)
+            .bind(owner_id)
+            .fetch_optional(db)
+            .await?
+            .is_some(),
+    )
+}
+
+/// Write title, tags and new memberships inside the commit transaction.
+async fn save_metadata(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    note_id: &str,
+    owner_id: &str,
+    metadata: &Metadata,
+) -> R<()> {
+    if let Some(title) = &metadata.title {
+        sqlx::query("DELETE FROM note_titles WHERE note_id=$1")
+            .bind(note_id)
+            .execute(&mut **tx)
+            .await?;
+        if !title.is_empty() {
+            sqlx::query("INSERT INTO note_titles(note_id,title) VALUES($1,$2)")
+                .bind(note_id)
+                .bind(title)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    if let Some(tags) = &metadata.tags {
+        sqlx::query("DELETE FROM note_tags WHERE note_id=$1")
+            .bind(note_id)
+            .execute(&mut **tx)
+            .await?;
+        for name in tags {
+            let normalized = crate::domain::names::normalize(name);
+            sqlx::query("INSERT INTO tags(tag_id,name,normalized_name) VALUES($1,$2,$3) ON CONFLICT(normalized_name) DO NOTHING")
+                .bind(core::id())
+                .bind(name)
+                .bind(&normalized)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("INSERT INTO note_tags(note_id,tag_id) SELECT $1,tag_id FROM tags WHERE normalized_name=$2 ON CONFLICT DO NOTHING")
+                .bind(note_id)
+                .bind(&normalized)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    for project_id in metadata.project_ids.iter().flatten() {
+        // Both foreign keys carry the owner, so a membership never crosses owners.
+        let added = sqlx::query("INSERT INTO project_notes(project_id,note_id,owner_id) SELECT project_id,$2,owner_id FROM projects WHERE project_id=$1 AND owner_id=$3 ON CONFLICT DO NOTHING")
+            .bind(project_id)
+            .bind(note_id)
+            .bind(owner_id)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+        if added != 1 && !owns_project(&mut **tx, project_id, owner_id).await? {
+            return Err(SaveError::UnknownProject);
+        }
+    }
+    Ok(())
 }
 
 /// JSON text with object keys in sorted order at every level.

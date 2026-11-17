@@ -51,6 +51,31 @@ pub const SAVE_SETTINGS: SaveSettings = SaveSettings {
     max_attempts: 5,
     revision_retention_seconds: 86_400,
 };
+/// Limits of the owner note API (`/me/notes`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoteApiLimits {
+    /// Characters in a note title.
+    pub max_title_chars: usize,
+    /// Tags on one note.
+    pub max_tags: usize,
+    /// Characters in one tag name.
+    pub max_tag_chars: usize,
+    /// Projects named in one create request.
+    pub max_projects: usize,
+    /// List page size when the request gives no limit.
+    pub default_page: i64,
+    /// Largest list page size and largest sync batch.
+    pub max_page: i64,
+}
+/// Default owner note API limits.
+pub const NOTE_API_LIMITS: NoteApiLimits = NoteApiLimits {
+    max_title_chars: 200,
+    max_tags: 20,
+    max_tag_chars: 50,
+    max_projects: 50,
+    default_page: 50,
+    max_page: 100,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,

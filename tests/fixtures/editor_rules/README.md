@@ -94,6 +94,7 @@ document has no placement operations (`invalid_operation`).
 {"op": "replace", "item": {"id": "t2", "kind": "text", "x": 5, "y": 0, "width": 10, "height": 10, "spans": []}}
 {"op": "update", "id": "t2", "changes": {"x": 20, "title": null}}
 {"op": "delete", "id": "t2"}
+{"op": "page", "page": {"width": 1000, "background": {"kind": "ruled", "spacing": 32, "visibility": 0.5}}}
 {"op": "batch", "steps": [{"op": "delete", "id": "t1"}, {"op": "update", "id": "t2", "changes": {"x": 0}}]}
 ```
 
@@ -102,6 +103,8 @@ document has no placement operations (`invalid_operation`).
 - `update` merges the top-level fields of `changes` into the item. A `null` value
   removes the field. `id` and `kind` cannot change.
 - `delete` removes the named item only. Group members are not removed with the group.
+- `page` replaces the page settings (`width` and `background`). Items do not move; an
+  item outside the new page width gives `out_of_bounds`.
 - `batch` applies its steps in order and checks only the final result. It is all or
   nothing. A batch cannot contain a batch and cannot be empty. Moving a group means a
   batch that moves every member.

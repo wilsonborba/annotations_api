@@ -135,8 +135,9 @@ fn op_fail<T>(code: &'static str, path: impl Into<String>) -> R<T> {
 ///
 /// Steps: `{"op":"add","item":{..}}`, `{"op":"replace","item":{..}}`,
 /// `{"op":"update","id":"..","changes":{..}}` (top-level merge, null removes a field),
-/// `{"op":"delete","id":".."}` and `{"op":"batch","steps":[..]}` (applied in order,
-/// all or nothing). The operation touches only the items that it names.
+/// `{"op":"delete","id":".."}`, `{"op":"page","page":{..}}` (replaces the page
+/// settings: width and background) and `{"op":"batch","steps":[..]}` (applied in
+/// order, all or nothing). The operation touches only the items that it names.
 pub fn apply_operation(
     family: Family,
     document: &Value,
@@ -147,9 +148,9 @@ pub fn apply_operation(
         return op_fail("invalid_operation", "operation");
     }
     let mut copy = document.clone();
-    let Some(items) = copy.get_mut("items").and_then(Value::as_array_mut) else {
+    if copy.get("items").and_then(Value::as_array).is_none() {
         return Err(RuleError::new("document_schema", "missing_field", "items"));
-    };
+    }
     let op = step_obj(operation, "operation")?;
     if op_kind(op, "operation")? == "batch" {
         allow(op, &["op", "steps"], "operation")?;
@@ -163,12 +164,26 @@ pub fn apply_operation(
         for (i, s) in steps.iter().enumerate() {
             let path = format!("operation.steps[{i}]");
             let step = step_obj(s, &path)?;
-            apply_step(items, step, &path)?;
+            apply_document_step(&mut copy, step, &path)?;
         }
     } else {
-        apply_step(items, op, "operation")?;
+        apply_document_step(&mut copy, op, "operation")?;
     }
     Ok(copy)
+}
+
+/// One step on the working copy: page settings, or one item step.
+fn apply_document_step(copy: &mut Value, step: &Map<String, Value>, path: &str) -> R<()> {
+    if op_kind(step, path)? == "page" {
+        allow(step, &["op", "page"], path)?;
+        copy["page"] = Value::Object(target(step, "page", path)?.clone());
+        return Ok(());
+    }
+    let items = copy
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| RuleError::new("document_schema", "missing_field", "items"))?;
+    apply_step(items, step, path)
 }
 
 fn step_obj<'a>(v: &'a Value, path: &str) -> R<&'a Map<String, Value>> {
@@ -177,7 +192,7 @@ fn step_obj<'a>(v: &'a Value, path: &str) -> R<&'a Map<String, Value>> {
 }
 fn op_kind<'a>(step: &'a Map<String, Value>, path: &str) -> R<&'a str> {
     match step.get("op").and_then(Value::as_str) {
-        Some(k @ ("add" | "replace" | "update" | "delete" | "batch")) => Ok(k),
+        Some(k @ ("add" | "replace" | "update" | "delete" | "page" | "batch")) => Ok(k),
         _ => op_fail("invalid_operation", format!("{path}.op")),
     }
 }
@@ -258,7 +273,7 @@ fn apply_step(items: &mut Vec<Value>, step: &Map<String, Value>, path: &str) -> 
             let i = find(items, id, &format!("{path}.id"))?;
             items.remove(i);
         }
-        // A batch inside a batch is not allowed.
+        // A batch inside a batch is not allowed; page steps are handled above.
         _ => return op_fail("invalid_operation", format!("{path}.op")),
     }
     Ok(())

@@ -1,5 +1,6 @@
 pub mod logs;
 pub mod media;
+pub mod notes;
 mod posts;
 mod rooms;
 use crate::{
@@ -25,6 +26,7 @@ pub fn router(app: App) -> Router {
             post(publish),
         )
         .merge(posts::routes())
+        .merge(notes::routes())
         .merge(media::routes())
         .merge(rooms::routes())
         .layer(axum::middleware::map_response(
