@@ -1,0 +1,71 @@
+{
+  "description": "A batch frees space and fills it again",
+  "rule_id": "operation",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 200,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "batch",
+    "steps": [
+      {
+        "op": "delete",
+        "id": "t2"
+      },
+      {
+        "op": "add",
+        "item": {
+          "id": "i1",
+          "kind": "image",
+          "x": 150,
+          "y": 0,
+          "width": 200,
+          "height": 100,
+          "file_id": "file-image-1"
+        }
+      },
+      {
+        "op": "update",
+        "id": "t1",
+        "changes": {
+          "width": 150
+        }
+      }
+    ]
+  },
+  "expected": "valid"
+}

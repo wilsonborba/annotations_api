@@ -1,0 +1,36 @@
+{
+  "description": "A circle that reaches past the page width is rejected",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 960,
+          "y": 100
+        },
+        "radius": 50
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "h1"
+    ]
+  }
+}

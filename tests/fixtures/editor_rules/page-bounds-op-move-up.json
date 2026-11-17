@@ -1,0 +1,43 @@
+{
+  "description": "Moving a block above the page top is rejected",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 10,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "t1",
+    "changes": {
+      "y": -1
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "t1"
+    ]
+  }
+}

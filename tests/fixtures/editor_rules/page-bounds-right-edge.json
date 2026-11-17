@@ -1,0 +1,69 @@
+{
+  "description": "A block ends exactly at the page width",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 800,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            90000,
+            100000
+          ],
+          "y": [
+            1000,
+            1000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 90000,
+            "y": 1000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 100000,
+            "y": 1000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "valid"
+}

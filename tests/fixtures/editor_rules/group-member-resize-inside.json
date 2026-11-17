@@ -1,0 +1,71 @@
+{
+  "description": "A member of a group grows inside free space (nested resize)",
+  "rule_id": "group_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 300,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "t2"
+        ]
+      },
+      {
+        "id": "t3",
+        "kind": "text",
+        "x": 0,
+        "y": 200,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t3"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "t1",
+    "changes": {
+      "width": 300
+    }
+  },
+  "expected": "valid"
+}

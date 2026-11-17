@@ -1,0 +1,52 @@
+{
+  "description": "Adding an item with an existing id is rejected",
+  "rule_id": "document_schema",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "add",
+    "item": {
+      "id": "t1",
+      "kind": "text",
+      "x": 300,
+      "y": 0,
+      "width": 200,
+      "height": 100,
+      "spans": [
+        {
+          "text": "Block t1"
+        }
+      ]
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "duplicate_id",
+    "items": [
+      "t1"
+    ]
+  }
+}

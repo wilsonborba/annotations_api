@@ -1,0 +1,43 @@
+{
+  "description": "Updating an item that does not exist is rejected",
+  "rule_id": "operation",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "t9",
+    "changes": {
+      "x": 10
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "missing_item",
+    "items": [
+      "t9"
+    ]
+  }
+}

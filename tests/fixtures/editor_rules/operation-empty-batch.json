@@ -1,0 +1,24 @@
+{
+  "description": "An empty batch is rejected",
+  "rule_id": "operation",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": []
+  },
+  "operation": {
+    "op": "batch",
+    "steps": []
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "invalid_operation",
+    "items": []
+  }
+}

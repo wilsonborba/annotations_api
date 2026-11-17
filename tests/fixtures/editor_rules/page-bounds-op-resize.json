@@ -1,0 +1,39 @@
+{
+  "description": "Widening a block past the page width is rejected",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "c1",
+        "kind": "csv_table",
+        "x": 600,
+        "y": 0,
+        "width": 300,
+        "height": 100,
+        "file_id": "file-csv-1"
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "c1",
+    "changes": {
+      "width": 401
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "c1"
+    ]
+  }
+}

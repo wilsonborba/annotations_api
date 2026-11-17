@@ -1,0 +1,43 @@
+{
+  "description": "Instant room: ink over a block is accepted",
+  "rule_id": "free_ink_overlap",
+  "family": "instant-room",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 100,
+          "y": 50
+        },
+        "radius": 40
+      }
+    ]
+  },
+  "expected": "valid"
+}

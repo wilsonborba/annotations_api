@@ -1,0 +1,32 @@
+{
+  "description": "Instant room: a block past a narrow page width is rejected",
+  "rule_id": "page_bounds",
+  "family": "instant-room",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 600,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "i1",
+        "kind": "image",
+        "x": 0,
+        "y": 0,
+        "width": 601,
+        "height": 100,
+        "file_id": "file-image-1"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "i1"
+    ]
+  }
+}

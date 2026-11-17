@@ -1,0 +1,42 @@
+{
+  "description": "A new block is added flush against an existing block",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 40,
+        "y": 40,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "add",
+    "item": {
+      "id": "i1",
+      "kind": "image",
+      "x": 240,
+      "y": 40,
+      "width": 120,
+      "height": 100,
+      "file_id": "file-image-1"
+    }
+  },
+  "expected": "valid"
+}
