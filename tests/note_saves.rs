@@ -76,6 +76,7 @@ fn create(key: &str, client: &str) -> SaveRequest {
             Representation::Original,
             Content::Document(original(40)),
         )],
+        metadata: None,
     }
 }
 fn update(key: &str, note_id: &str, if_match: i64, document: Value) -> SaveRequest {
@@ -87,6 +88,7 @@ fn update(key: &str, note_id: &str, if_match: i64, document: Value) -> SaveReque
             if_match,
         },
         representations: vec![input(Representation::Original, Content::Document(document))],
+        metadata: None,
     }
 }
 async fn begin(store: &Store, request: &SaveRequest) -> Pending {
