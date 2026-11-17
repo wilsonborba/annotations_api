@@ -1,0 +1,74 @@
+{
+  "description": "A batch with a valid first step and an overlapping second step is rejected as a whole",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "batch",
+    "steps": [
+      {
+        "op": "add",
+        "item": {
+          "id": "t2",
+          "kind": "text",
+          "x": 300,
+          "y": 0,
+          "width": 200,
+          "height": 100,
+          "spans": [
+            {
+              "text": "Block t2"
+            }
+          ]
+        }
+      },
+      {
+        "op": "add",
+        "item": {
+          "id": "t3",
+          "kind": "text",
+          "x": 150,
+          "y": 50,
+          "width": 200,
+          "height": 100,
+          "spans": [
+            {
+              "text": "Block t3"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "block_overlap",
+    "items": [
+      "t1",
+      "t3"
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "description": "Replacing a card with a wider copy that overlaps is rejected",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "w1",
+        "kind": "website_card",
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 120,
+        "url": "https://example.org/"
+      },
+      {
+        "id": "y1",
+        "kind": "youtube_card",
+        "x": 320,
+        "y": 0,
+        "width": 300,
+        "height": 120,
+        "url": "https://www.youtube.com/watch?v=abc123"
+      }
+    ]
+  },
+  "operation": {
+    "op": "replace",
+    "item": {
+      "id": "w1",
+      "kind": "website_card",
+      "x": 0,
+      "y": 0,
+      "width": 340,
+      "height": 120,
+      "url": "https://example.org/"
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "block_overlap",
+    "items": [
+      "w1",
+      "y1"
+    ]
+  }
+}

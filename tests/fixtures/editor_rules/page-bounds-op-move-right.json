@@ -1,0 +1,39 @@
+{
+  "description": "Moving a block past the page width is rejected",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "k1",
+        "kind": "task_card",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "task_id": "task-1"
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "k1",
+    "changes": {
+      "x": 900
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "k1"
+    ]
+  }
+}

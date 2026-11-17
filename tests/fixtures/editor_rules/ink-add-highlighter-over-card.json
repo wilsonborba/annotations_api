@@ -1,0 +1,68 @@
+{
+  "description": "Adding a highlighter stroke over a card is accepted",
+  "rule_id": "free_ink_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "l1",
+        "kind": "link_card",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 80,
+        "url": "https://example.org/article"
+      }
+    ]
+  },
+  "operation": {
+    "op": "add",
+    "item": {
+      "id": "s1",
+      "kind": "stroke",
+      "tool": "highlighter",
+      "brush_version": 1,
+      "width": 2.5,
+      "color": "#000000FF",
+      "opacity": 0.4,
+      "samples": {
+        "x": [
+          5000,
+          33000
+        ],
+        "y": [
+          8000,
+          8000
+        ],
+        "t": [
+          0,
+          8
+        ]
+      },
+      "nodes": [
+        {
+          "x": 5000,
+          "y": 8000,
+          "mode": "smooth",
+          "corner": false,
+          "sample": 0
+        },
+        {
+          "x": 33000,
+          "y": 8000,
+          "mode": "smooth",
+          "corner": false,
+          "sample": 1
+        }
+      ]
+    }
+  },
+  "expected": "valid"
+}

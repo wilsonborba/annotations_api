@@ -1,0 +1,47 @@
+{
+  "description": "Structured members of a group share an edge",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "i1",
+        "kind": "image",
+        "x": 200,
+        "y": 0,
+        "width": 100,
+        "height": 100,
+        "file_id": "file-image-1"
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "i1"
+        ]
+      }
+    ]
+  },
+  "expected": "valid"
+}

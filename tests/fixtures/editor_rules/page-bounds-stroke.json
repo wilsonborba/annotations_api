@@ -1,0 +1,64 @@
+{
+  "description": "Adding a stroke past the page width is rejected",
+  "rule_id": "page_bounds",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": []
+  },
+  "operation": {
+    "op": "add",
+    "item": {
+      "id": "s1",
+      "kind": "stroke",
+      "tool": "round",
+      "brush_version": 1,
+      "width": 2.5,
+      "color": "#000000FF",
+      "opacity": 1,
+      "samples": {
+        "x": [
+          90000,
+          100001
+        ],
+        "y": [
+          1000,
+          1000
+        ],
+        "t": [
+          0,
+          8
+        ]
+      },
+      "nodes": [
+        {
+          "x": 90000,
+          "y": 1000,
+          "mode": "smooth",
+          "corner": false,
+          "sample": 0
+        },
+        {
+          "x": 100001,
+          "y": 1000,
+          "mode": "smooth",
+          "corner": false,
+          "sample": 1
+        }
+      ]
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "out_of_bounds",
+    "items": [
+      "s1"
+    ]
+  }
+}

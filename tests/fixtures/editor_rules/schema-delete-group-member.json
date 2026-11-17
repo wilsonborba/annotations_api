@@ -1,0 +1,87 @@
+{
+  "description": "Deleting a member leaves the group with a missing member",
+  "rule_id": "document_schema",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            2000,
+            18000
+          ],
+          "y": [
+            12000,
+            15000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 2000,
+            "y": 12000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 18000,
+            "y": 15000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t1",
+          "s1"
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "delete",
+    "id": "s1"
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "missing_reference",
+    "items": [
+      "g1"
+    ]
+  }
+}

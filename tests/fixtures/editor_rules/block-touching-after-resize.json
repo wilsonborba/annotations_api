@@ -1,0 +1,50 @@
+{
+  "description": "A text block grows until its edge meets the neighbor",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 40,
+        "y": 40,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 300,
+        "y": 40,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "t1",
+    "changes": {
+      "width": 260
+    }
+  },
+  "expected": "valid"
+}

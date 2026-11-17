@@ -1,0 +1,120 @@
+{
+  "description": "Strokes and shapes overlap each other",
+  "rule_id": "free_ink_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            1000,
+            10000
+          ],
+          "y": [
+            1000,
+            10000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 1000,
+            "y": 1000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 10000,
+            "y": 10000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "s2",
+        "kind": "stroke",
+        "tool": "brush",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            10000,
+            1000
+          ],
+          "y": [
+            1000,
+            10000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 10000,
+            "y": 1000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 1000,
+            "y": 10000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 55,
+          "y": 55
+        },
+        "radius": 40
+      },
+      {
+        "id": "h2",
+        "kind": "shape",
+        "shape": "rectangle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "x": 20,
+        "y": 20,
+        "width": 60,
+        "height": 60
+      }
+    ]
+  },
+  "expected": "valid"
+}

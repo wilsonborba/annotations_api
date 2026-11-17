@@ -1,0 +1,46 @@
+{
+  "description": "A file_card block overlaps a text block",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "k1",
+        "kind": "file_card",
+        "x": 150,
+        "y": 50,
+        "width": 100,
+        "height": 100,
+        "file_id": "file-doc-1"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "block_overlap",
+    "items": [
+      "t1",
+      "k1"
+    ]
+  }
+}

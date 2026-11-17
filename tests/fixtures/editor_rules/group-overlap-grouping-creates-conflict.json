@@ -1,0 +1,100 @@
+{
+  "description": "Grouping text with ink that reaches into another block is rejected",
+  "rule_id": "group_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2.5,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            15000,
+            35000
+          ],
+          "y": [
+            5000,
+            5000
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 15000,
+            "y": 5000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 35000,
+            "y": 5000,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 300,
+        "y": 0,
+        "width": 200,
+        "height": 100,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "operation": {
+    "op": "add",
+    "item": {
+      "id": "g1",
+      "kind": "group",
+      "members": [
+        "t1",
+        "s1"
+      ]
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "group_overlap",
+    "items": [
+      "t2",
+      "g1"
+    ]
+  }
+}
