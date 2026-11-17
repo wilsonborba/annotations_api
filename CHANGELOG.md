@@ -3,6 +3,7 @@
 ### 🚀 Features
 
 - *(logs)* Add journald logger and trusted LAN stream
+- *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
 
 ### 💼 Other
 
