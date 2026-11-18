@@ -29,3 +29,13 @@ pub async fn create(store: &Store, code: &str, now: i64) -> Room {
     .await
     .unwrap()
 }
+
+pub fn metadata(bytes: &[u8]) -> annotations_api::domain::transfers::Metadata {
+    use sha2::{Digest, Sha256};
+    annotations_api::domain::transfers::Metadata {
+        filename: "file.txt".into(),
+        content_type: "text/plain".into(),
+        size: bytes.len() as i64,
+        checksum: format!("{:x}", Sha256::digest(bytes)),
+    }
+}

@@ -41,7 +41,7 @@ impl Store {
             .connect(&settings.database_url)
             .await?;
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(crate::core::STORAGE_REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| Error::unavailable())?;

@@ -24,6 +24,8 @@ pub const ROOM_SECONDS: i64 = 900;
 pub const ROOM_CAS_ATTEMPTS: usize = 16;
 pub const UPLOAD_BYTES: i64 = 50_000_000;
 pub const CACHE_SECONDS: u64 = 120;
+/// Shared storage request bound, also used before sweeping uncertain temporary uploads.
+pub const STORAGE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Limits for v2 note documents (`note-original`, `note-typed`, `instant-room`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

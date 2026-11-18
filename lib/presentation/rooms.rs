@@ -19,11 +19,10 @@ pub fn routes() -> Router<App> {
         .layer(axum::extract::DefaultBodyLimit::max(
             crate::core::NOTE_LIMITS.max_document_bytes + 1024,
         ))
+        .route("/instant/{code}/files", post(reserve))
         .route(
-            "/instant/{code}/files",
-            post(upload).layer(axum::extract::DefaultBodyLimit::max(
-                crate::core::UPLOAD_BYTES as usize + 1024 * 1024,
-            )),
+            "/instant/{code}/files/{id}/content",
+            axum::routing::put(upload).layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route("/instant/{code}/files/{id}", get(download))
 }
@@ -113,109 +112,84 @@ pub async fn remove(
     ))
 }
 
-#[derive(serde::Deserialize)]
-pub struct UploadQuery {
-    pub size: i64,
-}
-pub async fn upload(
-    State(app): State<App>,
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    Path(code): Path<String>,
-    axum::extract::Query(q): axum::extract::Query<UploadQuery>,
-    headers: axum::http::HeaderMap,
-    mut multipart: axum::extract::Multipart,
-) -> Result<Json<Value>> {
-    let ip = if peer.ip().is_loopback() {
+fn uploader_ip(peer: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> String {
+    if peer.ip().is_loopback() {
         headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<std::net::IpAddr>().ok())
             .unwrap_or(peer.ip())
+            .to_string()
     } else {
-        peer.ip()
-    };
-    let reservation =
-        crate::domain::transfers::begin(&app.store, &code, &ip.to_string(), q.size, now()).await?;
-    let result: Result<Value> =
-        match tokio::time::timeout(rooms::remaining(reservation.expires_at)?, async {
-            let mut field = multipart
-                .next_field()
-                .await
-                .map_err(|_| crate::core::Error::bad("Invalid upload"))?
-                .ok_or_else(|| crate::core::Error::bad("Missing file"))?;
-            let filename = field.file_name().unwrap_or("file").to_string();
-            let mime = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-            let (temp, size) = super::media::spool(&app.store.files, &mut field, q.size).await?;
-            if size != q.size {
-                return Err(crate::core::Error::bad(
-                    "Uploaded size differs from declared size",
-                ));
-            }
-            let file = app
-                .store
-                .files
-                .upload_path(&temp, &filename, &mime, &reservation.album, size)
-                .await?;
-            let result =
-                crate::domain::transfers::attach(&app.store, &code, &reservation, &file, now())
-                    .await;
-            if result.is_err() {
-                let _ = app.store.files.delete(&file.key).await;
-            }
-            result
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(rooms::expired()),
-        };
-    if result.is_err() {
-        // Keep cleanup ownership if remote storage failed after creating bytes.
-        if let Ok(files) = app.store.files.album(&reservation.album).await {
-            let mut all_deleted = true;
-            for file in files {
-                if app.store.files.delete(&file.key).await.is_err() {
-                    all_deleted = false;
-                }
-            }
-            if all_deleted {
-                let _ = app.store.transfers.release(&reservation.id).await;
-            }
-        }
+        peer.ip().to_string()
     }
-    Ok(Json(result?))
+}
+pub async fn reserve(
+    State(app): State<App>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Path(code): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<crate::domain::transfers::Metadata>,
+) -> Result<Json<Value>> {
+    let ip = uploader_ip(peer, &headers);
+    let key = super::notes::idempotency_key(&headers);
+    let record = crate::domain::transfers::begin(&app.store, &code, &ip, input, key, now()).await?;
+    Ok(Json(record.public()))
+}
+pub async fn upload(
+    State(app): State<App>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Path((code, id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> Result<Json<Value>> {
+    let ip = uploader_ip(peer, &headers);
+    let record = crate::domain::transfers::upload(
+        &app.store,
+        &code,
+        &id,
+        &ip,
+        headers.get("content-type").and_then(|v| v.to_str().ok()),
+        body.into_data_stream(),
+        now(),
+    )
+    .await?;
+    Ok(Json(record.public()))
 }
 pub async fn download(
     State(app): State<App>,
     Path((code, id)): Path<(String, String)>,
 ) -> Result<axum::response::Response> {
-    let room = app.store.rooms.get(&code, now()).await?;
-    let item = room
+    let record = crate::domain::transfers::download(&app.store, &code, &id, now()).await?;
+    let body = app
+        .store
         .files
-        .iter()
-        .find(|i| i.id == id && !i.file_key.is_empty())
-        .ok_or_else(crate::core::Error::missing)?;
-    let body = app.store.files.read(&item.file_key).await?;
-    app.store.rooms.get(&code, now()).await?;
-    let mut response = axum::response::Response::new(rooms::download_body(body, room.expires_at)?);
+        .read(
+            record
+                .file_key
+                .as_deref()
+                .ok_or_else(crate::core::Error::unavailable)?,
+        )
+        .await?;
+    crate::domain::transfers::download(&app.store, &code, &id, now()).await?;
+    let mut response =
+        axum::response::Response::new(rooms::download_body(body, record.expires_at)?);
     let inline = matches!(
-        item.content_type.as_str(),
+        record.content_type.as_str(),
         "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/avif"
     );
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         if inline {
-            item.content_type
+            record
+                .content_type
                 .parse()
                 .map_err(|_| crate::core::Error::bad("Invalid media type"))?
         } else {
             "application/octet-stream".parse().unwrap()
         },
     );
-    let safe_name = item
+    let safe_name = record
         .filename
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'))
@@ -233,6 +207,10 @@ pub async fn download(
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         "no-store".parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        "content-security-policy",
+        "sandbox; default-src 'none'".parse().unwrap(),
     );
     response
         .headers_mut()

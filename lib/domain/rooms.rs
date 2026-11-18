@@ -29,6 +29,9 @@ pub struct Room {
     pub document: Value,
     pub item_revisions: HashMap<String, i64>,
     pub files: Vec<File>,
+    /// Prevent a retried upload from restoring an explicitly removed reference.
+    #[serde(default)]
+    pub released_files: HashSet<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,7 +124,8 @@ pub async fn validate(store: &Store, room: &Room) -> Result<()> {
         &NOTE_LIMITS,
     )
     .map_err(Error::from)?;
-    if room.item_revisions.len() > NOTE_LIMITS.max_items || room.files.len() > NOTE_LIMITS.max_items
+    if room.item_revisions.len() > NOTE_LIMITS.max_items
+        || room.files.len() + room.released_files.len() > NOTE_LIMITS.max_items
     {
         return Err(Error::bad(
             "too_many_items: The room has reached its item limit",
@@ -158,6 +162,7 @@ pub async fn create(store: &Store, code: &str, input: Create, now: i64) -> Resul
         document: input.document,
         item_revisions: HashMap::new(),
         files: vec![],
+        released_files: HashSet::new(),
     };
     validate(store, &room).await?;
     let mut room = room;
@@ -278,6 +283,8 @@ async fn change(
             .cloned()
             .collect();
         next.files.retain(|f| !removed.iter().any(|r| r.id == f.id));
+        next.released_files
+            .extend(removed.iter().map(|f| f.id.clone()));
         next.revision += 1;
         validate(store, &next).await?;
         match store.rooms.compare_set(previous.revision, &next, now).await {

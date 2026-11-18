@@ -354,17 +354,22 @@ pub async fn get(store: &Store, owner: &str, file_id: &str) -> R<Stored> {
 }
 
 /// The verified result of reading an upload body.
-struct Received {
-    size: i64,
-    checksum: String,
+pub(crate) struct Received {
+    pub(crate) size: i64,
+    pub(crate) checksum: String,
     head: Vec<u8>,
     text_valid: bool,
-    temp: Option<tempfile::TempPath>,
+    pub(crate) temp: Option<tempfile::TempPath>,
 }
 
 /// Read the body. Stop at `limit + 1` bytes. With `spool`, write it to a
 /// temporary file for the FSM upload.
-async fn receive<S, B, E>(store: &Store, mut body: S, limit: i64, spool: bool) -> R<Received>
+pub(crate) async fn receive<S, B, E>(
+    store: &Store,
+    mut body: S,
+    limit: i64,
+    spool: bool,
+) -> R<Received>
 where
     S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
@@ -417,20 +422,28 @@ where
 
 /// Check received bytes against the reservation: size, SHA-256, then the real type.
 fn verify(file: &Stored, received: &Received) -> R<()> {
-    if received.size != file.size {
+    verify_received(file.size, &file.checksum, &file.content_type, received)
+}
+pub(crate) fn verify_received(
+    size: i64,
+    checksum: &str,
+    content_type: &str,
+    received: &Received,
+) -> R<()> {
+    if received.size != size {
         return Err(invalid(
             "size_mismatch",
             "The bytes do not have the reserved size",
         ));
     }
-    if received.checksum != file.checksum {
+    if received.checksum != checksum {
         return Err(invalid(
             "checksum_mismatch",
             "The bytes do not have the reserved checksum",
         ));
     }
-    let text = matches!(file.content_type.as_str(), "text/plain" | "text/csv");
-    if !matches_type(&file.content_type, &received.head) || (text && !received.text_valid) {
+    let text = matches!(content_type, "text/plain" | "text/csv");
+    if !matches_type(content_type, &received.head) || (text && !received.text_valid) {
         return Err(invalid(
             "content_type_mismatch",
             "The bytes are not of the reserved content type",
@@ -440,7 +453,7 @@ fn verify(file: &Stored, received: &Received) -> R<()> {
 }
 
 /// The media type of a Content-Type header value, without parameters.
-fn media_type(value: &str) -> String {
+pub(crate) fn media_type(value: &str) -> String {
     value
         .split(';')
         .next()

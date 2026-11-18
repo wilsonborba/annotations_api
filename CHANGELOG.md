@@ -17,6 +17,7 @@
 - *(files)* Stage uploads in the configurable UPLOAD_STAGING_DIR instead of the system temp folder (#27)
 - *(admin)* Add administrative note, project and file operations with the central access level (#26)
 - *(instant)* Validate v2 room documents with atomic edits, item revisions and fixed expiry (#29)
+- *(instant)* Reserve temporary file metadata, verify binary uploads and preserve expiry quotas (#30)
 
 ### 🐛 Bug Fixes
 

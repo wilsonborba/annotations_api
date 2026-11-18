@@ -1,11 +1,23 @@
-use crate::core::{Error, Result, UPLOAD_BYTES};
+use crate::{
+    core::{Error, Result, UPLOAD_BYTES},
+    domain::rooms::expired,
+};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    #[default]
+    Reserved,
+    Uploading,
+    Failed,
+    Ready,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reservation {
     pub id: String,
     pub ip: String,
@@ -13,6 +25,18 @@ pub struct Reservation {
     pub expires_at: i64,
     pub album: String,
     pub file_key: Option<String>,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub filename: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub checksum: String,
+    #[serde(default)]
+    pub status: Status,
+    #[serde(default)]
+    pub attempt: String,
 }
 #[derive(Clone)]
 pub enum Transfers {
@@ -20,6 +44,51 @@ pub enum Transfers {
     Memory(Arc<Mutex<HashMap<String, Reservation>>>),
     Unavailable,
 }
+const RESERVE: &str = r#"
+local now=math.max(tonumber(ARGV[4]),tonumber(redis.call('TIME')[1]))
+local input=cjson.decode(ARGV[1])
+if input.expires_at<=now then return {3,''} end
+local previous=redis.call('GET',KEYS[2])
+if previous then return {1,previous} end
+local used=tonumber(redis.call('GET',KEYS[1]) or '0')
+local due=redis.call('ZRANGEBYSCORE',KEYS[4],'-inf',now)
+for _,member in ipairs(due) do
+    used=math.max(0,used-tonumber(string.match(member,':(%d+)$')))
+    redis.call('ZREM',KEYS[4],member)
+end
+redis.call('SET',KEYS[1],used)
+if used+input.bytes>tonumber(ARGV[2]) then return {2,''} end
+redis.call('SET',KEYS[1],used+input.bytes)
+redis.call('SET',KEYS[2],ARGV[1])
+redis.call('ZADD',KEYS[3],input.expires_at,input.id)
+redis.call('ZADD',KEYS[4],input.expires_at,ARGV[3])
+return {1,ARGV[1]}
+"#;
+const COMPARE_SET: &str = r#"
+local now=math.max(tonumber(ARGV[3]),tonumber(redis.call('TIME')[1]))
+local text=redis.call('GET',KEYS[1])
+if not text then return 0 end
+if cjson.decode(text).expires_at<=now then return 3 end
+if text~=ARGV[1] then return 2 end
+redis.call('SET',KEYS[1],ARGV[2])
+return 1
+"#;
+const RELEASE: &str = r#"
+local text=redis.call('GET',KEYS[1])
+if text then
+    local r=cjson.decode(text)
+    local q='annotations:quota:'..r.ip
+    local index='annotations:quota-active:'..r.ip
+    local member=r.id..':'..tostring(r.bytes)
+    if redis.call('ZREM',index,member)==1 or not r.code or r.code=='' then
+        local used=tonumber(redis.call('GET',q) or '0')
+        if used<=r.bytes then redis.call('DEL',q) else redis.call('DECRBY',q,r.bytes) end
+    end
+    redis.call('DEL',KEYS[1])
+end
+redis.call('ZREM',KEYS[2],ARGV[1])
+return 1
+"#;
 impl Transfers {
     pub fn new(redis: Option<redis::Client>) -> Self {
         redis.map(Self::Redis).unwrap_or(Self::Unavailable)
@@ -27,45 +96,58 @@ impl Transfers {
     pub fn fixture() -> Self {
         Self::Memory(Arc::default())
     }
-    pub async fn reserve(&self, input: Reservation) -> Result<()> {
+    pub async fn reserve(&self, input: Reservation, now: i64) -> Result<Reservation> {
         if input.bytes <= 0 || input.bytes > UPLOAD_BYTES {
             return Err(Error(
                 axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                "A file must be between 1 byte and 50 MB".into(),
+                "file_too_large: A file must be between 1 byte and 50 MB".into(),
             ));
+        }
+        if input.expires_at <= now {
+            return Err(expired());
         }
         match self {
             Self::Memory(m) => {
                 let mut m = m.lock().unwrap();
+                if let Some(previous) = m.get(&input.id) {
+                    return Ok(previous.clone());
+                }
                 let used: i64 = m
                     .values()
-                    .filter(|r| r.ip == input.ip)
+                    .filter(|r| r.ip == input.ip && r.expires_at > now)
                     .map(|r| r.bytes)
                     .sum();
                 if used + input.bytes > UPLOAD_BYTES {
-                    return Err(Error(
-                        axum::http::StatusCode::TOO_MANY_REQUESTS,
-                        "The active 50 MB upload allowance for this IP is full".into(),
-                    ));
+                    return Err(quota_full());
                 }
-                m.insert(input.id.clone(), input);
+                m.insert(input.id.clone(), input.clone());
+                Ok(input)
             }
             Self::Redis(client) => {
                 let mut c = client
                     .get_multiplexed_async_connection()
                     .await
                     .map_err(|_| Error::unavailable())?;
-                let saved:i64=redis::Script::new("local used=tonumber(redis.call('GET',KEYS[1]) or '0'); if used+tonumber(ARGV[1])>tonumber(ARGV[2]) then return 0 end; redis.call('INCRBY',KEYS[1],ARGV[1]); redis.call('SET',KEYS[2],ARGV[3]); redis.call('ZADD',KEYS[3],ARGV[4],ARGV[5]); return 1").key(format!("annotations:quota:{}",input.ip)).key(format!("annotations:transfer:{}",input.id)).key("annotations:cleanup").arg(input.bytes).arg(UPLOAD_BYTES).arg(serde_json::to_string(&input).unwrap()).arg(input.expires_at).arg(&input.id).invoke_async(&mut c).await.map_err(|_|Error::unavailable())?;
-                if saved != 1 {
-                    return Err(Error(
-                        axum::http::StatusCode::TOO_MANY_REQUESTS,
-                        "The active 50 MB upload allowance for this IP is full".into(),
-                    ));
+                let (status, text): (i64, String) = redis::Script::new(RESERVE)
+                    .key(format!("annotations:quota:{}", input.ip))
+                    .key(format!("annotations:transfer:{}", input.id))
+                    .key("annotations:cleanup")
+                    .key(format!("annotations:quota-active:{}", input.ip))
+                    .arg(serde_json::to_string(&input).map_err(|_| Error::unavailable())?)
+                    .arg(UPLOAD_BYTES)
+                    .arg(format!("{}:{}", input.id, input.bytes))
+                    .arg(now)
+                    .invoke_async(&mut c)
+                    .await
+                    .map_err(|_| Error::unavailable())?;
+                match status {
+                    1 => serde_json::from_str(&text).map_err(|_| Error::unavailable()),
+                    3 => Err(expired()),
+                    _ => Err(quota_full()),
                 }
             }
-            Self::Unavailable => return Err(Error::unavailable()),
+            Self::Unavailable => Err(Error::unavailable()),
         }
-        Ok(())
     }
     pub async fn get(&self, id: &str) -> Result<Option<Reservation>> {
         match self {
@@ -79,33 +161,68 @@ impl Transfers {
                     .get(format!("annotations:transfer:{id}"))
                     .await
                     .map_err(|_| Error::unavailable())?;
-                Ok(value.and_then(|v| serde_json::from_str(&v).ok()))
+                value
+                    .map(|v| serde_json::from_str(&v).map_err(|_| Error::unavailable()))
+                    .transpose()
             }
             Self::Unavailable => Err(Error::unavailable()),
         }
     }
-    pub async fn attach(&self, id: &str, key: &str) -> Result<()> {
+    /// Atomic upload ownership and finalization. Unchanged metadata stays bound to
+    /// the original room, uploader and absolute expiry throughout the operation.
+    pub async fn compare_set(
+        &self,
+        previous: &Reservation,
+        next: &Reservation,
+        now: i64,
+    ) -> Result<bool> {
+        if next.id != previous.id
+            || next.ip != previous.ip
+            || next.code != previous.code
+            || next.bytes != previous.bytes
+            || next.expires_at != previous.expires_at
+            || next.album != previous.album
+            || next.filename != previous.filename
+            || next.content_type != previous.content_type
+            || next.checksum != previous.checksum
+        {
+            return Err(Error::bad(
+                "invalid_upload_state: Upload metadata cannot change",
+            ));
+        }
+        if previous.expires_at <= now {
+            return Err(expired());
+        }
         match self {
             Self::Memory(m) => {
-                m.lock()
-                    .unwrap()
-                    .get_mut(id)
-                    .ok_or_else(Error::missing)?
-                    .file_key = Some(key.into());
+                let mut m = m.lock().unwrap();
+                if m.get(&previous.id) != Some(previous) {
+                    return Ok(false);
+                }
+                m.insert(next.id.clone(), next.clone());
+                Ok(true)
             }
             Self::Redis(client) => {
                 let mut c = client
                     .get_multiplexed_async_connection()
                     .await
                     .map_err(|_| Error::unavailable())?;
-                let saved:i64=redis::Script::new("local s=redis.call('GET',KEYS[1]); if not s then return 0 end;local r=cjson.decode(s);r.file_key=ARGV[1];redis.call('SET',KEYS[1],cjson.encode(r));return 1").key(format!("annotations:transfer:{id}")).arg(key).invoke_async(&mut c).await.map_err(|_|Error::unavailable())?;
-                if saved != 1 {
-                    return Err(Error::missing());
+                let status: i64 = redis::Script::new(COMPARE_SET)
+                    .key(format!("annotations:transfer:{}", previous.id))
+                    .arg(serde_json::to_string(previous).map_err(|_| Error::unavailable())?)
+                    .arg(serde_json::to_string(next).map_err(|_| Error::unavailable())?)
+                    .arg(now)
+                    .invoke_async(&mut c)
+                    .await
+                    .map_err(|_| Error::unavailable())?;
+                match status {
+                    1 => Ok(true),
+                    3 => Err(expired()),
+                    _ => Ok(false),
                 }
             }
-            Self::Unavailable => return Err(Error::unavailable()),
+            Self::Unavailable => Err(Error::unavailable()),
         }
-        Ok(())
     }
     pub async fn release(&self, id: &str) -> Result<()> {
         match self {
@@ -117,7 +234,13 @@ impl Transfers {
                     .get_multiplexed_async_connection()
                     .await
                     .map_err(|_| Error::unavailable())?;
-                let _:i64=redis::Script::new("local s=redis.call('GET',KEYS[1]);if s then local r=cjson.decode(s);local q='annotations:quota:'..r.ip;local used=tonumber(redis.call('GET',q) or '0');if used<=r.bytes then redis.call('DEL',q) else redis.call('DECRBY',q,r.bytes) end;redis.call('DEL',KEYS[1]);end;redis.call('ZREM',KEYS[2],ARGV[1]);return 1").key(format!("annotations:transfer:{id}")).key("annotations:cleanup").arg(id).invoke_async(&mut c).await.map_err(|_|Error::unavailable())?;
+                let _: i64 = redis::Script::new(RELEASE)
+                    .key(format!("annotations:transfer:{id}"))
+                    .key("annotations:cleanup")
+                    .arg(id)
+                    .invoke_async(&mut c)
+                    .await
+                    .map_err(|_| Error::unavailable())?;
             }
             Self::Unavailable => return Err(Error::unavailable()),
         }
@@ -161,4 +284,10 @@ impl Transfers {
             Self::Unavailable => Err(Error::unavailable()),
         }
     }
+}
+fn quota_full() -> Error {
+    Error(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        "ip_quota_exceeded: The active 50 MB upload allowance for this IP is full".into(),
+    )
 }
