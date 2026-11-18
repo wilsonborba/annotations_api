@@ -5,6 +5,7 @@ use crate::{
     domain::{
         App,
         notes::{self, NoteError},
+        training,
         transcriptions::{self, Event},
     },
     presentation::notes::Owner,
@@ -31,6 +32,7 @@ pub fn routes() -> Router<App> {
         .route("/me/transcriptions/{run_id}/events", get(events))
         .route("/me/transcriptions/{run_id}/result", put(result))
         .route("/me/transcriptions/{run_id}/execution", delete(cancel))
+        .route("/me/transcriptions/{run_id}/feedback", post(feedback))
         .layer(DefaultBodyLimit::max(notes::MAX_BODY_BYTES + 1))
 }
 
@@ -68,6 +70,16 @@ async fn result(
 ) -> Result<Response, NoteError> {
     let (run, created) = transcriptions::submit(&app.store, &owner, &run_id, &body).await?;
     Ok((status(created), Json(run)).into_response())
+}
+/// 201 when at least one event is new, 200 when every event is a retry of a stored one.
+async fn feedback(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(run_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, NoteError> {
+    let (events, created) = training::submit(&app.store, &owner, &run_id, &body).await?;
+    Ok((status(created), Json(events)).into_response())
 }
 async fn cancel(
     State(app): State<App>,

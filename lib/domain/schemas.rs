@@ -36,6 +36,13 @@ pub async fn draft(store: &Store, input: Draft) -> Result<Value> {
             "No validator exists for this note schema version",
         ));
     }
+    if input.name == crate::domain::training::SCHEMA
+        && !crate::domain::training::supports(input.version)
+    {
+        return Err(Error::bad(
+            "No validator exists for this feedback schema version",
+        ));
+    }
     let mut paths = std::collections::HashSet::new();
     for field in &input.fields {
         if field.path.is_empty()

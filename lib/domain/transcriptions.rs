@@ -51,7 +51,7 @@ fn text<'a>(body: &'a Map<String, Value>, field: &str, max: usize) -> R<&'a str>
     }
 }
 /// A client source hash or event id: 1 to 128 visible ASCII characters.
-fn visible(s: &str) -> bool {
+pub(crate) fn visible(s: &str) -> bool {
     (1..=128).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_graphic())
 }
 fn optional_visible<'a>(body: &'a Map<String, Value>, field: &str) -> R<Option<&'a str>> {
@@ -61,7 +61,7 @@ fn optional_visible<'a>(body: &'a Map<String, Value>, field: &str) -> R<Option<&
         Some(_) => Err(wrong_type(field)),
     }
 }
-fn request_hash(value: &Value) -> String {
+pub(crate) fn request_hash(value: &Value) -> String {
     let mut out = String::new();
     canonical(value, &mut out);
     sha_hex(out.as_bytes())
@@ -296,7 +296,7 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<(Value, bool)> 
     Ok((get(store, owner, &run_id).await?, true))
 }
 
-async fn own(store: &Store, owner: &str, run_id: &str) -> R<RunRow> {
+pub(crate) async fn own(store: &Store, owner: &str, run_id: &str) -> R<RunRow> {
     if !visible(run_id) {
         return Err(not_found());
     }
