@@ -679,6 +679,7 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
             "note_id",
             "published_at",
             "representations",
+            "study_source",
             "summary",
             "tags",
             "title",
@@ -817,4 +818,182 @@ async fn unpublish_keeps_the_working_copy_and_the_sync_feed() {
             "{table}"
         );
     }
+}
+
+#[tokio::test]
+async fn study_source_links_published_typed_post_and_hides_when_source_unpublished_or_deleted() {
+    let (store, router) = setup().await;
+    let (src_id, src_orig_rev, src_typed_rev) = note_with_both(&router, "typed-src").await;
+
+    let study_payload = |client: &str, source_id: &str| {
+        json!({
+            "client_note_id": client,
+            "main_representation": "original",
+            "study_source_note_id": source_id,
+            "representations": {
+                "original": {"document": original("Study")}
+            }
+        })
+    };
+
+    // Linking to a missing or unpublished note fails with study_source_unavailable.
+    for bad in ["missing-note", &src_id] {
+        let r = call(
+            &router,
+            "POST",
+            "/me/notes",
+            Some(B),
+            None,
+            Some(study_payload("s-fail", bad)),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.body);
+        assert_eq!(r.body["code"], "study_source_unavailable");
+    }
+
+    // Publishing only Original is still not a published Typed post.
+    let pub_orig = publish(&router, &src_id, "0", json!({"original": src_orig_rev})).await;
+    assert_eq!(pub_orig.status, StatusCode::OK, "{}", pub_orig.body);
+    let r = call(
+        &router,
+        "POST",
+        "/me/notes",
+        Some(B),
+        None,
+        Some(study_payload("s-orig", &src_id)),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(r.body["code"], "study_source_unavailable");
+
+    // Publishing Typed allows creating a handwritten study linked to it.
+    let pub_typed = publish(&router, &src_id, "1", json!({"typed": src_typed_rev})).await;
+    assert_eq!(pub_typed.status, StatusCode::OK, "{}", pub_typed.body);
+    let created = call(
+        &router,
+        "POST",
+        "/me/notes",
+        Some(B),
+        None,
+        Some(study_payload("s-ok", &src_id)),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let study_id = created.body["note_id"].as_str().unwrap().to_string();
+    let study_orig_rev = created.body["revisions"][0]["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(created.body["study_source"]["note_id"], src_id.as_str());
+
+    // Working-copy GET returns the study_source snapshot.
+    let wc = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{study_id}"),
+        Some(B),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(wc.status, StatusCode::OK);
+    assert_eq!(wc.body["study_source"]["note_id"], src_id.as_str());
+
+    // Publishing the study exposes study_source on the public note.
+    let pub_study = call(
+        &router,
+        "PUT",
+        &format!("/me/notes/{study_id}/publication"),
+        Some(B),
+        Some("0"),
+        Some(json!({"language": "en", "representations": {"original": study_orig_rev}})),
+    )
+    .await;
+    assert_eq!(pub_study.status, StatusCode::OK, "{}", pub_study.body);
+    let public_view = call(
+        &router,
+        "GET",
+        &format!("/notes/{study_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(public_view.status, StatusCode::OK);
+    assert_eq!(public_view.body["study_source"]["note_id"], src_id.as_str());
+
+    // Unpublishing the source hides the public link without touching the study.
+    let unpub = call(
+        &router,
+        "DELETE",
+        &format!("/me/notes/{src_id}/publication"),
+        Some(A),
+        Some("2"),
+        None,
+    )
+    .await;
+    assert_eq!(unpub.status, StatusCode::NO_CONTENT, "{}", unpub.body);
+    let public_after_unpub = call(
+        &router,
+        "GET",
+        &format!("/notes/{study_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(public_after_unpub.status, StatusCode::OK);
+    assert!(public_after_unpub.body["study_source"].is_null());
+    // Owner working copy still keeps the snapshot.
+    let wc_after_unpub = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{study_id}"),
+        Some(B),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        wc_after_unpub.body["study_source"]["note_id"],
+        src_id.as_str()
+    );
+
+    // Deleting the source note keeps the study note intact and clears source_note_id.
+    let del_src = call(
+        &router,
+        "DELETE",
+        &format!("/me/notes/{src_id}"),
+        Some(A),
+        Some("1"),
+        None,
+    )
+    .await;
+    assert_eq!(del_src.status, StatusCode::NO_CONTENT, "{}", del_src.body);
+    let wc_after_del = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{study_id}"),
+        Some(B),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(wc_after_del.status, StatusCode::OK);
+    assert!(wc_after_del.body["study_source"]["note_id"].is_null());
+    let public_after_del = call(
+        &router,
+        "GET",
+        &format!("/notes/{study_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(public_after_del.status, StatusCode::OK);
+    assert!(public_after_del.body["study_source"].is_null());
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM note_study_sources").await,
+        1
+    );
 }
