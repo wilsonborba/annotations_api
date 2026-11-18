@@ -378,6 +378,7 @@ pub(crate) async fn summary(store: &Store, owner: &str, row: &sqlx::any::AnyRow)
         .map(|r| json!({"representation": r.get::<String,_>("representation"), "revision_id": r.get::<String,_>("revision_id"), "schema_version": r.get::<i64,_>("schema_version")}))
         .collect();
     let published = publication::is_published(store, &note_id).await?;
+    let study_source = study_source_json(store, &note_id).await?;
     let title: String = row.get("title");
     Ok(json!({
         "note_id": note_id,
@@ -389,9 +390,32 @@ pub(crate) async fn summary(store: &Store, owner: &str, row: &sqlx::any::AnyRow)
         "project_ids": projects,
         "representations": representations,
         "published": published,
+        "study_source": study_source,
         "created_at": row.get::<i64, _>("created_at"),
         "updated_at": row.get::<i64, _>("updated_at"),
     }))
+}
+
+async fn study_source_json(store: &Store, note_id: &str) -> R<Value> {
+    let row = sqlx::query(
+        "SELECT source_note_id,source_title,source_author_id,source_author_name FROM note_study_sources WHERE note_id=$1",
+    )
+    .bind(note_id)
+    .fetch_optional(&store.db)
+    .await?;
+    Ok(match row {
+        None => Value::Null,
+        Some(r) => {
+            let title: String = r.try_get("source_title")?;
+            let author_name: String = r.try_get("source_author_name")?;
+            json!({
+                "note_id": r.try_get::<Option<String>, _>("source_note_id")?,
+                "title": if title.is_empty() { Value::Null } else { json!(title) },
+                "author_id": r.try_get::<Option<String>, _>("source_author_id")?,
+                "author_name": publication::author_name(author_name),
+            })
+        }
+    })
 }
 
 async fn note_row(store: &Store, owner: &str, note_id: &str) -> R<sqlx::any::AnyRow> {
@@ -650,6 +674,7 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<Created> {
             "metadata",
             "representations",
             "project_ids",
+            "study_source_note_id",
         ],
         "",
     )?;
@@ -722,6 +747,36 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<Created> {
         }
         meta.project_ids = Some(ids);
     }
+    let study_source = match body.get("study_source_note_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) => {
+            if !token(id) {
+                return Err(NoteError::invalid(
+                    "invalid_study_source",
+                    "study_source_note_id uses 1 to 128 visible ASCII characters",
+                ));
+            }
+            let row = sqlx::query(
+                "SELECT n.note_id,COALESCE(pt.title,'') AS title,a.author_id,COALESCE(o.display_name,'') AS display_name FROM note_publications np JOIN notes n ON n.note_id=np.note_id LEFT JOIN note_publication_titles pt ON pt.note_id=np.note_id LEFT JOIN authors a ON a.owner_id=n.owner_id LEFT JOIN owners o ON o.id=n.owner_id WHERE np.note_id=$1 AND EXISTS(SELECT 1 FROM note_published_representations p WHERE p.note_id=np.note_id AND p.representation='typed')",
+            )
+            .bind(id)
+            .fetch_optional(&store.db)
+            .await?
+            .ok_or_else(|| {
+                NoteError::invalid(
+                    "study_source_unavailable",
+                    "The study source must be a published typed post",
+                )
+            })?;
+            Some((
+                row.try_get::<String, _>("note_id")?,
+                row.try_get::<String, _>("title")?,
+                row.try_get::<Option<String>, _>("author_id")?,
+                row.try_get::<String, _>("display_name")?,
+            ))
+        }
+        Some(_) => return Err(wrong_type("study_source_note_id")),
+    };
     if let Some(found) = existing(store, owner, &client_note_id).await? {
         return Ok(found);
     }
@@ -747,16 +802,33 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<Created> {
         metadata: Some(meta),
     };
     match note_saves::save(store, &request).await {
-        Ok(result) => Ok(Created {
-            created: true,
-            revision: result.revision,
-            body: {
-                let mut out = save_body(&result);
-                out["client_note_id"] = json!(client_note_id);
-                out["created"] = json!(true);
-                out
-            },
-        }),
+        Ok(result) => {
+            if let Some((source_id, title, author_id, author_name)) = &study_source {
+                sqlx::query(
+                    "INSERT INTO note_study_sources(note_id,source_note_id,source_title,source_author_id,source_author_name,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(note_id) DO NOTHING",
+                )
+                .bind(&result.note_id)
+                .bind(source_id)
+                .bind(title)
+                .bind(author_id)
+                .bind(author_name)
+                .bind(core::now())
+                .execute(&store.db)
+                .await?;
+            }
+            let study_source = study_source_json(store, &result.note_id).await?;
+            Ok(Created {
+                created: true,
+                revision: result.revision,
+                body: {
+                    let mut out = save_body(&result);
+                    out["client_note_id"] = json!(client_note_id);
+                    out["created"] = json!(true);
+                    out["study_source"] = study_source;
+                    out
+                },
+            })
+        }
         Err(SaveError::NoteExists { .. }) => existing(store, owner, &client_note_id)
             .await?
             .ok_or_else(|| NoteError::from(Error::unavailable())),

@@ -560,6 +560,7 @@ async fn public_header(store: &Store, note_id: &str) -> R<(State, Value)> {
     let main = Representation::parse(&row.get::<String, _>("main_representation"));
     let views: Vec<Representation> = s.items.iter().map(|p| p.representation).collect();
     let default_view = main.filter(|m| views.contains(m)).unwrap_or(views[0]);
+    let study_source = public_study_source(store, note_id).await?;
     let header = json!({
         "note_id": note_id,
         "author_id": row.try_get::<Option<String>, _>("author_id")?,
@@ -572,9 +573,32 @@ async fn public_header(store: &Store, note_id: &str) -> R<(State, Value)> {
         "default_view": default_view.as_str(),
         "can_switch_view": views.len() > 1,
         "typed_uses_earlier_revision": s.typed_uses_earlier_revision(),
+        "study_source": study_source,
         "published_at": s.updated_at,
     });
     Ok((s, header))
+}
+
+async fn public_study_source(store: &Store, note_id: &str) -> R<Value> {
+    let row = sqlx::query(
+        "SELECT s.source_note_id,COALESCE(pt.title,'') AS title,a.author_id,COALESCE(o.display_name,'') AS display_name FROM note_study_sources s JOIN note_publications np ON np.note_id=s.source_note_id JOIN notes n ON n.note_id=np.note_id LEFT JOIN note_publication_titles pt ON pt.note_id=np.note_id LEFT JOIN authors a ON a.owner_id=n.owner_id LEFT JOIN owners o ON o.id=n.owner_id WHERE s.note_id=$1 AND EXISTS(SELECT 1 FROM note_published_representations p WHERE p.note_id=np.note_id AND p.representation='typed')",
+    )
+    .bind(note_id)
+    .fetch_optional(&store.db)
+    .await?;
+    Ok(match row {
+        None => Value::Null,
+        Some(r) => {
+            let title: String = r.try_get("title")?;
+            let name: String = r.try_get("display_name")?;
+            json!({
+                "note_id": r.try_get::<String, _>("source_note_id")?,
+                "title": if title.is_empty() { Value::Null } else { json!(title) },
+                "author_id": r.try_get::<Option<String>, _>("author_id")?,
+                "author_name": author_name(name),
+            })
+        }
+    })
 }
 
 /// The public list form of a published note: the header of `public_note`
