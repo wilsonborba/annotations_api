@@ -4,7 +4,9 @@
   "schema_version": 1,
   "files": [
     "room-file-1",
-    "room-file-2"
+    "room-file-2",
+    "room-file-3",
+    "room-file-4"
   ],
   "document": {
     "page": {
@@ -177,6 +179,24 @@
         "report_id": "report-42",
         "mode": "live",
         "source": "link"
+      },
+      {
+        "id": "c1",
+        "kind": "csv_table",
+        "x": 40,
+        "y": 1500,
+        "width": 300,
+        "height": 120,
+        "file_id": "room-file-3"
+      },
+      {
+        "id": "p1",
+        "kind": "pdf_preview",
+        "x": 40,
+        "y": 1700,
+        "width": 300,
+        "height": 120,
+        "file_id": "room-file-4"
       },
       {
         "id": "g1",

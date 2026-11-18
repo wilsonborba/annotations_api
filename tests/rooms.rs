@@ -322,7 +322,7 @@ async fn schema_publication_allowed_kinds_and_room_file_scope_are_enforced() {
         .starts_with("schema_not_published:")
     );
     let store = fixture::store().await;
-    for kind in ["task_card", "quiz_card", "csv_table", "pdf_preview"] {
+    for kind in ["task_card", "quiz_card"] {
         let mut item = text("bad", 0);
         item["kind"] = json!(kind);
         assert!(
@@ -339,6 +339,24 @@ async fn schema_publication_allowed_kinds_and_room_file_scope_are_enforced() {
             .unwrap_err()
             .1
             .starts_with("kind_not_allowed:")
+        );
+    }
+    for kind in ["csv_table", "pdf_preview"] {
+        let card = json!({"id":"card","kind":kind,"x":0,"y":0,"width":320,"height":160,"file_id":"missing-room-file"});
+        assert!(
+            rooms::create(
+                &store,
+                kind,
+                Create {
+                    schema_version: 1,
+                    document: document(vec![card])
+                },
+                100
+            )
+            .await
+            .unwrap_err()
+            .1
+            .starts_with("missing_file:")
         );
     }
     let mut report = text("bad", 0);

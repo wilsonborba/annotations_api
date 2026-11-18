@@ -1,0 +1,49 @@
+{
+  "description": "Instant room: a PDF preview moved onto a CSV table is rejected",
+  "rule_id": "block_overlap",
+  "family": "instant-room",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "c1",
+        "kind": "csv_table",
+        "x": 0,
+        "y": 0,
+        "width": 320,
+        "height": 160,
+        "file_id": "room-file-1"
+      },
+      {
+        "id": "p1",
+        "kind": "pdf_preview",
+        "x": 320,
+        "y": 0,
+        "width": 160,
+        "height": 226.5,
+        "file_id": "room-file-2"
+      }
+    ]
+  },
+  "operation": {
+    "op": "update",
+    "id": "p1",
+    "changes": {
+      "x": 160
+    }
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "block_overlap",
+    "items": [
+      "c1",
+      "p1"
+    ]
+  }
+}
