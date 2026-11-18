@@ -14,7 +14,7 @@ use crate::{
             self, Content, Metadata, Representation, RepresentationInput, SaveError, SaveRequest,
             SaveResult, Target,
         },
-        publication,
+        publication, transcriptions,
     },
 };
 use axum::http::StatusCode;
@@ -226,6 +226,7 @@ fn document_input(
         representation,
         schema_version: schema_version(map, &format!("{field}."))?,
         content: Content::Document(document.clone()),
+        source_revision_id: None,
     })
 }
 
@@ -763,7 +764,10 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<Created> {
     }
 }
 
-/// Replace one representation completely: `{"representation", "schema_version"?, "document"}`.
+/// Replace one representation completely: `{"representation", "schema_version"?, "document",
+/// "transcription_run_id"?}`. A typed save that names a completed transcription run of the
+/// caller accepts that run: the new Typed revision records the run's Original source
+/// revision, and the save fails when that revision is no longer the current Original.
 pub async fn replace(
     store: &Store,
     owner: &str,
@@ -773,7 +777,16 @@ pub async fn replace(
     raw: &[u8],
 ) -> R<(Value, i64)> {
     let body = parse_body(raw)?;
-    allow(&body, &["representation", "schema_version", "document"], "")?;
+    allow(
+        &body,
+        &[
+            "representation",
+            "schema_version",
+            "document",
+            "transcription_run_id",
+        ],
+        "",
+    )?;
     let representation = representation_name(
         body.get("representation")
             .and_then(Value::as_str)
@@ -783,9 +796,23 @@ pub async fn replace(
     let document = body.get("document").ok_or_else(|| {
         NoteError::invalid("missing_field", "A required field is missing: document")
     })?;
+    let operation_key = update_key(idempotency_key)?;
+    let source_revision_id = match body.get("transcription_run_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(run_id)) if representation == Representation::Typed => {
+            Some(transcriptions::accepted_source(store, owner, run_id, note_id).await?)
+        }
+        Some(Value::String(_)) => {
+            return Err(NoteError::invalid(
+                "source_on_original",
+                "Only a typed revision has a transcription source",
+            ));
+        }
+        Some(_) => return Err(wrong_type("transcription_run_id")),
+    };
     let request = SaveRequest {
         owner_id: owner.to_string(),
-        operation_key: update_key(idempotency_key)?,
+        operation_key,
         target: Target::Update {
             note_id: note_id.to_string(),
             if_match,
@@ -794,6 +821,7 @@ pub async fn replace(
             representation,
             schema_version: schema_version(&body, "")?,
             content: Content::Document(document.clone()),
+            source_revision_id,
         }],
         metadata: None,
     };
@@ -826,6 +854,7 @@ pub async fn patch(
             representation: Representation::Original,
             schema_version: None,
             content: Content::Operation(op.clone()),
+            source_revision_id: None,
         }],
     };
     let meta = match body.get("metadata") {

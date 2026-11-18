@@ -1,15 +1,17 @@
 pub mod cache;
 pub mod documents;
+pub mod execution;
 pub mod files;
 pub mod links;
 pub mod models;
 pub mod rooms;
+pub mod transcriptions;
 pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012 and 013 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 15] = [
+pub const SQLITE_MIGRATIONS: [&str; 16] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -25,6 +27,7 @@ pub const SQLITE_MIGRATIONS: [&str; 15] = [
     include_str!("../../tests/sqlite/013_v2_managed_files.sql"),
     include_str!("../../migrations/014_v2_model_registry.sql"),
     include_str!("../../migrations/015_v2_model_downloads.sql"),
+    include_str!("../../migrations/016_v2_transcription_runs.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -34,6 +37,8 @@ pub struct Store {
     pub rooms: rooms::Rooms,
     pub transfers: transfers::Transfers,
     pub files: files::Files,
+    /// Cloud transcription execution. No server runtime exists yet.
+    pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
 }
 impl Store {
@@ -63,6 +68,7 @@ impl Store {
             rooms: rooms::Rooms::new(redis.clone()),
             transfers: transfers::Transfers::new(redis),
             files: files::Files::new(settings, http.clone()),
+            execution: execution::none(),
             http,
         })
     }
@@ -87,6 +93,7 @@ impl Store {
             rooms: rooms::Rooms::fixture(),
             transfers: transfers::Transfers::fixture(),
             files: files::Files::fixture(),
+            execution: execution::none(),
             http: reqwest::Client::new(),
         }
     }

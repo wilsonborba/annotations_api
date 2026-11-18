@@ -14,6 +14,7 @@ pub mod publication;
 pub mod rooms;
 pub mod schemas;
 pub mod tasks;
+pub mod transcriptions;
 pub mod transfers;
 pub mod waitlist;
 use crate::dal::Store;

@@ -80,6 +80,10 @@ pub struct RepresentationInput {
     /// operation keeps the schema version of the current revision.
     pub schema_version: Option<i64>,
     pub content: Content,
+    /// Typed only: the Original revision that an accepted transcription run used.
+    /// The commit sets `note_revisions.source_revision_id` to it and fails with
+    /// `transcription_source_stale` when it is no longer the current Original.
+    pub source_revision_id: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub enum Target {
@@ -150,6 +154,8 @@ pub enum SaveError {
     UnknownProject,
     /// A store is unavailable (503). The save is not reported as done.
     Unavailable,
+    /// The transcription source is no longer the current Original (409). Nothing changed.
+    SourceStale,
 }
 impl SaveError {
     pub fn status(&self) -> StatusCode {
@@ -158,9 +164,10 @@ impl SaveError {
             Self::InvalidRequest(_) | Self::OperationReused | Self::UnknownProject => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            Self::OperationInProgress | Self::Conflict { .. } | Self::NoteExists { .. } => {
-                StatusCode::CONFLICT
-            }
+            Self::OperationInProgress
+            | Self::Conflict { .. }
+            | Self::NoteExists { .. }
+            | Self::SourceStale => StatusCode::CONFLICT,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -176,6 +183,7 @@ impl SaveError {
             Self::NotFound => "not_found",
             Self::UnknownProject => "unknown_project",
             Self::Unavailable => "storage_unavailable",
+            Self::SourceStale => "transcription_source_stale",
         }
     }
 }
@@ -222,6 +230,7 @@ impl From<SaveError> for Error {
                 "duplicate_representation" => "Each representation appears once",
                 "main_representation_missing" => "A new note needs its main representation",
                 "missing_base" => "An operation needs a saved current revision",
+                "source_on_original" => "Only a typed revision has a transcription source",
                 "schema_version_mismatch" => {
                     "An operation keeps the schema version of the current revision"
                 }
@@ -236,6 +245,9 @@ impl From<SaveError> for Error {
             SaveError::NotFound => "",
             SaveError::UnknownProject => "A project does not exist for this owner",
             SaveError::Unavailable => "",
+            SaveError::SourceStale => {
+                "The transcription used an earlier Original revision; it is not applied over newer work"
+            }
         };
         let status = e.status();
         match e {
@@ -265,6 +277,7 @@ struct Prepared {
     document: Value,
     content_hash: String,
     files: Vec<FileRef>,
+    source_revision_id: Option<String>,
 }
 
 /// A started operation between its steps.
@@ -562,10 +575,27 @@ impl Pending {
                 1
             }
         };
+        // A transcription result is never applied over newer Original work.
+        for source in self
+            .items
+            .iter()
+            .filter_map(|i| i.source_revision_id.as_ref())
+        {
+            let current = sqlx::query(
+                "SELECT revision_id FROM note_current_revisions WHERE note_id=$1 AND representation='original'",
+            )
+            .bind(&self.note_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(|r| r.get::<String, _>("revision_id"));
+            if current.as_ref() != Some(source) {
+                return Err(SaveError::SourceStale);
+            }
+        }
         for item in &self.items {
             let representation = item.representation.as_str();
             sqlx::query(
-                "INSERT INTO note_revisions(revision_id,note_id,representation,document_id,schema_name,schema_version,content_hash,source_revision_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,NULL,$8)",
+                "INSERT INTO note_revisions(revision_id,note_id,representation,document_id,schema_name,schema_version,content_hash,source_revision_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
             )
             .bind(&item.revision_id)
             .bind(&self.note_id)
@@ -574,6 +604,7 @@ impl Pending {
             .bind(item.representation.family().name())
             .bind(item.schema_version)
             .bind(&item.content_hash)
+            .bind(&item.source_revision_id)
             .bind(now)
             .execute(&mut *tx)
             .await?;
@@ -805,11 +836,11 @@ async fn release_files(tx: &mut sqlx::Transaction<'_, sqlx::Any>, operation_id: 
     Ok(())
 }
 
-/// Remove revisions created before `before` that are not current, not published
-/// and not the source of another revision, with their file references and their
-/// CouchDB documents. At most `batch` revisions. Returns the number removed.
+/// Remove revisions created before `before` that are not current, not published,
+/// not the source of another revision and not the source of a transcription run,
+/// with their file references and their CouchDB documents. At most `batch` revisions. Returns the number removed.
 pub async fn prune_revisions(store: &Store, before: i64, batch: i64) -> R<usize> {
-    const UNREFERENCED: &str = "NOT EXISTS(SELECT 1 FROM note_current_revisions c WHERE c.revision_id=r.revision_id) AND NOT EXISTS(SELECT 1 FROM note_published_representations p WHERE p.revision_id=r.revision_id) AND NOT EXISTS(SELECT 1 FROM note_revisions s WHERE s.source_revision_id=r.revision_id)";
+    const UNREFERENCED: &str = "NOT EXISTS(SELECT 1 FROM note_current_revisions c WHERE c.revision_id=r.revision_id) AND NOT EXISTS(SELECT 1 FROM note_published_representations p WHERE p.revision_id=r.revision_id) AND NOT EXISTS(SELECT 1 FROM note_revisions s WHERE s.source_revision_id=r.revision_id) AND NOT EXISTS(SELECT 1 FROM transcription_runs t WHERE t.source_revision_id=r.revision_id)";
     let rows = sqlx::query(&format!(
         "SELECT r.revision_id,r.document_id FROM note_revisions r WHERE r.created_at<$1 AND {UNREFERENCED} ORDER BY r.created_at,r.revision_id LIMIT $2"
     ))
@@ -1035,6 +1066,13 @@ fn check_shape(request: &SaveRequest) -> R<()> {
     if seen.len() != request.representations.len() {
         return Err(SaveError::InvalidRequest("duplicate_representation"));
     }
+    if request
+        .representations
+        .iter()
+        .any(|r| r.source_revision_id.is_some() && r.representation != Representation::Typed)
+    {
+        return Err(SaveError::InvalidRequest("source_on_original"));
+    }
     match &request.target {
         Target::Create {
             client_note_id,
@@ -1164,6 +1202,7 @@ async fn prepare(
             content_hash: sha_hex(text.as_bytes()),
             document,
             files,
+            source_revision_id: input.source_revision_id.clone(),
         });
     }
     items.sort_by_key(|i| i.representation);
@@ -1210,7 +1249,12 @@ fn request_hash(request: &SaveRequest) -> String {
                 Content::Document(v) => ("document", v),
                 Content::Operation(v) => ("operation", v),
             };
-            json!({"representation": r.representation.as_str(), "schema_version": r.schema_version, kind: content})
+            let mut out = json!({"representation": r.representation.as_str(), "schema_version": r.schema_version, kind: content});
+            // Saves without a source keep the hash of the earlier request format.
+            if let Some(source) = &r.source_revision_id {
+                out["source_revision_id"] = json!(source);
+            }
+            out
         })
         .collect();
     let mut hashed = json!({"target": target, "representations": representations});
@@ -1295,7 +1339,7 @@ async fn save_metadata(
 }
 
 /// JSON text with object keys in sorted order at every level.
-fn canonical(value: &Value, out: &mut String) {
+pub(crate) fn canonical(value: &Value, out: &mut String) {
     match value {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
@@ -1325,7 +1369,7 @@ fn canonical(value: &Value, out: &mut String) {
     }
 }
 
-fn sha_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))

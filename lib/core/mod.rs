@@ -155,6 +155,25 @@ pub const FILE_SETTINGS: FileSettings = FileSettings {
     max_attempts: 5,
     retry_seconds: 30,
 };
+/// Bounds of transcription runs (`/me/transcriptions`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TranscriptionLimits {
+    /// Managed transcription files that one run names.
+    pub max_file_refs: usize,
+    /// Events that one read of the event stream sends at most.
+    pub event_batch: i64,
+    /// Wait between two checks for new events of an unfinished run.
+    pub event_poll: std::time::Duration,
+    /// Keep-alive comment interval of the event stream.
+    pub keep_alive: std::time::Duration,
+}
+/// Default transcription bounds. The keep-alive matches the log stream.
+pub const TRANSCRIPTION_LIMITS: TranscriptionLimits = TranscriptionLimits {
+    max_file_refs: 20,
+    event_batch: 100,
+    event_poll: std::time::Duration::from_secs(1),
+    keep_alive: std::time::Duration::from_secs(15),
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,
