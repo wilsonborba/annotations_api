@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod documents;
 pub mod files;
+pub mod links;
 pub mod rooms;
 pub mod transfers;
 use crate::core::{Error, Result, Settings};
