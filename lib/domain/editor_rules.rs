@@ -20,7 +20,10 @@
 //! rejected if the result breaks a rule. Neighbors are never moved to make space.
 use crate::{
     core::{Error, GRID_CELL, NoteLimits},
-    domain::note_documents::{self, DocumentError, Family, FileRef},
+    domain::{
+        note_documents::{self, DocumentError, Family, FileRef},
+        stroke_samples,
+    },
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -504,13 +507,18 @@ fn rect(
                 .reduce(|a, b| a.union(&b))
         }),
         Some("stroke") => {
+            // A schema-valid stroke always decodes; the samples cover the line.
             let s = &it["samples"];
-            let col = |k: &str| s[k].as_array().cloned().unwrap_or_default();
-            let (xs, ys) = (col("x"), col("y"));
-            let samples = xs
+            let columns = stroke_samples::decode(
+                s["count"].as_u64().unwrap_or(0) as usize,
+                s["data"].as_str().unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            let samples = columns
+                .x
                 .iter()
-                .zip(&ys)
-                .map(|(x, y)| (num(x) / 100.0, num(y) / 100.0));
+                .zip(&columns.y)
+                .map(|(x, y)| (*x as f64 / 100.0, *y as f64 / 100.0));
             Rect::of_points(samples.chain(node_points(&it["nodes"])))
         }
         Some("shape") => match it["shape"].as_str() {

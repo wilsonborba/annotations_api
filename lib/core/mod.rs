@@ -39,13 +39,15 @@ pub struct NoteLimits {
     /// Size of the serialized document body in bytes.
     pub max_document_bytes: usize,
 }
-/// Default note limits. The document byte limit stays below the CouchDB 3 default
-/// `max_document_size` (8,000,000 bytes) and leaves room for the stored envelope.
+/// Default note limits (annotations#19, decision 32a104ee983b48ca995a7e7820839020):
+/// at least 30 dense handwritten pages in one note. A stored revision keeps its
+/// body as one gzip attachment of its CouchDB document, so the uncompressed
+/// document may be larger than the CouchDB document size.
 pub const NOTE_LIMITS: NoteLimits = NoteLimits {
-    max_items: 10_000,
+    max_items: 50_000,
     max_samples_per_stroke: 10_000,
     max_nodes_per_stroke: 1_000,
-    max_document_bytes: 7_500_000,
+    max_document_bytes: 64 * 1024 * 1024,
 };
 /// The invisible placement grid of the editor (B2.1): one cell in page units.
 /// Structured blocks sit on whole cells; ink and shape points never snap.
