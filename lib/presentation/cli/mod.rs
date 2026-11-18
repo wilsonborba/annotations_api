@@ -20,6 +20,7 @@ pub enum Command {
     Register(String),
     Activate(String),
     Rollback,
+    Withdraw(String),
     /// Write received and approved examples as JSON Lines to standard output.
     TrainingExport {
         include_flagged: bool,
@@ -32,7 +33,7 @@ impl Command {
         matches!(self, Self::TrainingExport { .. } | Self::TrainingRemove(_))
     }
 }
-const USAGE: &str = "Usage: annotations-api models register <manifest> | models activate <version> | models rollback | training export [--include-flagged] | training remove (--run <run_id> | --note <note_id> | --account <account_id>)";
+const USAGE: &str = "Usage: annotations-api models register <manifest> | models activate <version> | models rollback | models withdraw <version> | training export [--include-flagged] | training remove (--run <run_id> | --note <note_id> | --account <account_id>)";
 pub fn parse(args: &[String]) -> anyhow::Result<Option<Command>> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     Ok(match args.as_slice() {
@@ -40,6 +41,7 @@ pub fn parse(args: &[String]) -> anyhow::Result<Option<Command>> {
         ["models", "register", path] => Some(Command::Register(path.to_string())),
         ["models", "activate", version] => Some(Command::Activate(version.to_string())),
         ["models", "rollback"] => Some(Command::Rollback),
+        ["models", "withdraw", version] => Some(Command::Withdraw(version.to_string())),
         ["training", "export"] => Some(Command::TrainingExport {
             include_flagged: false,
         }),
@@ -72,6 +74,7 @@ pub async fn run(db: &AnyPool, command: Command) -> anyhow::Result<String> {
         }
         Command::Activate(version) => models::activate(db, &version).await,
         Command::Rollback => models::rollback(db).await,
+        Command::Withdraw(version) => models::withdraw(db, &version).await,
         Command::TrainingExport { .. } | Command::TrainingRemove(_) => {
             anyhow::bail!("Training commands run with document storage")
         }

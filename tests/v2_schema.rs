@@ -638,6 +638,20 @@ fn sqlite_file_previews_equivalent_differs_only_in_the_column_statement() {
     }
 }
 
+#[test]
+fn sqlite_model_withdrawn_equivalent_matches_postgres_status_values() {
+    let postgres = include_str!("../migrations/019_v2_model_withdrawn.sql");
+    let sqlite = include_str!("sqlite/019_v2_model_withdrawn.sql");
+    let expected = "CHECK(status IN ('draft','active','retired','withdrawn'))";
+    assert!(postgres.contains(expected) && sqlite.contains(expected));
+    for text in [postgres, sqlite] {
+        let lower = text.to_lowercase();
+        for word in ["json", "array", "[]", "delete "] {
+            assert!(!lower.contains(word), "migration contains {word}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn file_purpose_and_reference_kind_use_value_lists() {
     let store = seeded().await;

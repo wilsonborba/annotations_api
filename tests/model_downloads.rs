@@ -399,3 +399,69 @@ async fn retired_release_stays_downloadable() {
         StatusCode::CREATED
     );
 }
+
+#[tokio::test]
+async fn withdrawn_release_is_not_listed_and_downloads_fail() {
+    let s = setup().await;
+    models::register(&s.store.db, manifest("v2", &s.key, &s.bytes))
+        .await
+        .unwrap();
+    models::activate(&s.store.db, "v2").await.unwrap();
+    let v2_req = r#"{"model_version":"v2","platform":"linux"}"#;
+    let v2_dl = create(&s.router, ALICE, v2_req).await;
+    assert_eq!(v2_dl.status, StatusCode::CREATED);
+    let v2_id = v2_dl.json()["download_id"].as_str().unwrap().to_owned();
+
+    // Rollback marks v2 as withdrawn; v1 becomes active again.
+    assert_eq!(models::rollback(&s.store.db).await.unwrap(), "v1");
+
+    let list = call(&s.router, "GET", "/models", Some(ALICE), None, None).await;
+    assert_eq!(list.status, StatusCode::OK);
+    let list_body = list.json();
+    let versions: Vec<&str> = list_body["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["version"].as_str())
+        .collect();
+    assert_eq!(versions, ["v1"]);
+
+    let detail = call(&s.router, "GET", "/models/v2", Some(ALICE), None, None).await;
+    assert_eq!(detail.status, StatusCode::GONE);
+    assert_eq!(detail.json()["code"], "model_withdrawn");
+
+    let new_dl = create(&s.router, BOB, v2_req).await;
+    assert_eq!(new_dl.status, StatusCode::GONE);
+    assert_eq!(new_dl.json()["code"], "model_withdrawn");
+
+    let old_meta = call(
+        &s.router,
+        "GET",
+        &format!("/me/model_downloads/{v2_id}"),
+        Some(ALICE),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(old_meta.status, StatusCode::GONE);
+    assert_eq!(old_meta.json()["code"], "model_withdrawn");
+
+    let old_bytes = content(&s.router, ALICE, &v2_id, None).await;
+    assert_eq!(old_bytes.status, StatusCode::GONE);
+    assert_eq!(old_bytes.json()["code"], "model_withdrawn");
+
+    // A non-active release withdrawn later via CLI also stops serving.
+    models::register(&s.store.db, manifest("v3", &s.key, &s.bytes))
+        .await
+        .unwrap();
+    models::activate(&s.store.db, "v3").await.unwrap();
+    // v1 is now retired and downloadable until withdrawn.
+    assert_eq!(
+        create(&s.router, ALICE, LINUX_V1).await.status,
+        StatusCode::CREATED
+    );
+    models::withdraw(&s.store.db, "v1").await.unwrap();
+    let after_withdraw = create(&s.router, BOB, LINUX_V1).await;
+    assert_eq!(after_withdraw.status, StatusCode::GONE);
+    assert_eq!(after_withdraw.json()["code"], "model_withdrawn");
+}

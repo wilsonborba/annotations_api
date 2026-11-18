@@ -74,21 +74,26 @@ pub async fn pointers(tx: &mut Transaction<'_, Any>) -> Result<(Option<String>, 
         row.try_get("previous_version")?,
     ))
 }
-pub async fn exists(tx: &mut Transaction<'_, Any>, version: &str) -> Result<bool> {
+pub async fn release_status(
+    tx: &mut Transaction<'_, Any>,
+    version: &str,
+) -> Result<Option<String>> {
     Ok(
-        sqlx::query("SELECT version FROM model_releases WHERE version=$1")
+        sqlx::query("SELECT status FROM model_releases WHERE version=$1")
             .bind(version)
             .fetch_optional(&mut **tx)
             .await?
-            .is_some(),
+            .map(|r| r.get("status")),
     )
 }
 pub async fn switch(
     tx: &mut Transaction<'_, Any>,
     target: &str,
     previous: Option<&str>,
+    replaced_status: &str,
 ) -> Result<()> {
-    sqlx::query("UPDATE model_releases SET status='retired' WHERE status='active'")
+    sqlx::query("UPDATE model_releases SET status=$1 WHERE status='active'")
+        .bind(replaced_status)
         .execute(&mut **tx)
         .await?;
     sqlx::query("UPDATE model_releases SET status='active' WHERE version=$1")
@@ -100,6 +105,19 @@ pub async fn switch(
         .bind(previous)
         .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+pub async fn mark_withdrawn(tx: &mut Transaction<'_, Any>, version: &str) -> Result<()> {
+    sqlx::query("UPDATE model_releases SET status='withdrawn' WHERE version=$1")
+        .bind(version)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE model_default SET previous_version=NULL WHERE id=1 AND previous_version=$1",
+    )
+    .bind(version)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 async fn public(db: &AnyPool, row: AnyRow) -> Result<PublicManifest> {
@@ -149,7 +167,7 @@ async fn public(db: &AnyPool, row: AnyRow) -> Result<PublicManifest> {
 }
 pub async fn list(db: &AnyPool, platform: Option<&str>, language: Option<&str>) -> Result<Listing> {
     // Capture statuses and pointer in one SQL snapshot. Child metadata is immutable.
-    let rows = sqlx::query("SELECT r.version,r.status,r.created_at,d.current_version FROM model_releases r CROSS JOIN model_default d WHERE r.status <> 'draft' AND ($1 IS NULL OR EXISTS(SELECT 1 FROM model_artifacts a WHERE a.version=r.version AND a.platform=$1)) AND ($2 IS NULL OR EXISTS(SELECT 1 FROM model_languages l WHERE l.version=r.version AND l.language=$2)) ORDER BY r.created_at DESC,r.version")
+    let rows = sqlx::query("SELECT r.version,r.status,r.created_at,d.current_version FROM model_releases r CROSS JOIN model_default d WHERE r.status IN ('active','retired') AND ($1 IS NULL OR EXISTS(SELECT 1 FROM model_artifacts a WHERE a.version=r.version AND a.platform=$1)) AND ($2 IS NULL OR EXISTS(SELECT 1 FROM model_languages l WHERE l.version=r.version AND l.language=$2)) ORDER BY r.created_at DESC,r.version")
         .bind(platform).bind(language).fetch_all(db).await?;
     let mut default_version = None;
     let mut models = Vec::new();
@@ -166,19 +184,37 @@ pub async fn list(db: &AnyPool, platform: Option<&str>, language: Option<&str>) 
         models,
     })
 }
-pub async fn detail(db: &AnyPool, version: &str) -> Result<Option<PublicManifest>> {
+pub enum DetailRow {
+    Missing,
+    Withdrawn,
+    Manifest(PublicManifest),
+}
+pub async fn detail(db: &AnyPool, version: &str) -> Result<DetailRow> {
     let row = sqlx::query("SELECT r.version,r.status,r.created_at,d.current_version FROM model_releases r CROSS JOIN model_default d WHERE r.version=$1 AND r.status <> 'draft'")
         .bind(version).fetch_optional(db).await?;
     match row {
-        Some(row) => Ok(Some(public(db, row).await?)),
-        None => Ok(None),
+        Some(row) if row.try_get::<String, _>("status")? == "withdrawn" => Ok(DetailRow::Withdrawn),
+        Some(row) => Ok(DetailRow::Manifest(public(db, row).await?)),
+        None => Ok(DetailRow::Missing),
     }
 }
 
-/// True when the release is served (not a draft) and has an artifact for the platform.
-pub async fn served_artifact(db: &AnyPool, version: &str, platform: &str) -> Result<bool> {
-    Ok(sqlx::query("SELECT 1 FROM model_artifacts a JOIN model_releases r ON r.version=a.version WHERE a.version=$1 AND a.platform=$2 AND r.status <> 'draft'")
-        .bind(version).bind(platform).fetch_optional(db).await?.is_some())
+pub enum ArtifactCheck {
+    Missing,
+    Withdrawn,
+    Ready,
+}
+/// Check whether the release is served (active or retired) and has an artifact for the platform.
+pub async fn served_artifact(db: &AnyPool, version: &str, platform: &str) -> Result<ArtifactCheck> {
+    let row = sqlx::query("SELECT r.status FROM model_artifacts a JOIN model_releases r ON r.version=a.version WHERE a.version=$1 AND a.platform=$2 AND r.status <> 'draft'")
+        .bind(version).bind(platform).fetch_optional(db).await?;
+    match row {
+        Some(row) if row.try_get::<String, _>("status")? == "withdrawn" => {
+            Ok(ArtifactCheck::Withdrawn)
+        }
+        Some(_) => Ok(ArtifactCheck::Ready),
+        None => Ok(ArtifactCheck::Missing),
+    }
 }
 const DOWNLOAD: &str = "SELECT d.download_id,d.version,d.platform,d.created_at,a.size,a.sha256,a.fsm_reference,r.status FROM model_downloads d JOIN model_artifacts a ON a.version=d.version AND a.platform=d.platform JOIN model_releases r ON r.version=d.version";
 fn to_download(row: &AnyRow) -> std::result::Result<Download, sqlx::Error> {
@@ -220,33 +256,38 @@ pub async fn create_download(
     tx.commit().await?;
     Ok(to_download(&row)?)
 }
-async fn own(db: &AnyPool, owner: &str, id: &str) -> Result<Option<AnyRow>> {
+pub enum OwnDownload {
+    Missing,
+    Withdrawn,
+    Row(AnyRow),
+}
+async fn own(db: &AnyPool, owner: &str, id: &str) -> Result<OwnDownload> {
     // Drafts are never served; the owner filter hides other accounts' ids.
-    Ok(sqlx::query(&format!(
+    let row = sqlx::query(&format!(
         "{DOWNLOAD} WHERE d.download_id=$1 AND d.owner_id=$2 AND r.status <> 'draft'"
     ))
     .bind(id)
     .bind(owner)
     .fetch_optional(db)
-    .await?)
-}
-pub async fn download(db: &AnyPool, owner: &str, id: &str) -> Result<Option<Download>> {
-    match own(db, owner, id).await? {
-        Some(row) => Ok(Some(to_download(&row)?)),
-        None => Ok(None),
+    .await?;
+    match row {
+        Some(row) if row.try_get::<String, _>("status")? == "withdrawn" => {
+            Ok(OwnDownload::Withdrawn)
+        }
+        Some(row) => Ok(OwnDownload::Row(row)),
+        None => Ok(OwnDownload::Missing),
     }
 }
-pub async fn download_content(
-    db: &AnyPool,
-    owner: &str,
-    id: &str,
-) -> Result<Option<DownloadContent>> {
-    match own(db, owner, id).await? {
-        Some(row) => Ok(Some(DownloadContent {
-            fsm_reference: row.try_get("fsm_reference")?,
-            size: row.try_get("size")?,
-            sha256: row.try_get("sha256")?,
-        })),
-        None => Ok(None),
-    }
+pub async fn download(db: &AnyPool, owner: &str, id: &str) -> Result<OwnDownload> {
+    own(db, owner, id).await
+}
+pub fn download_from_row(row: &AnyRow) -> Result<Download> {
+    Ok(to_download(row)?)
+}
+pub fn content_from_row(row: &AnyRow) -> Result<DownloadContent> {
+    Ok(DownloadContent {
+        fsm_reference: row.try_get("fsm_reference")?,
+        size: row.try_get("size")?,
+        sha256: row.try_get("sha256")?,
+    })
 }
