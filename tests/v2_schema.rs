@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 19] = [
+const V2_TABLES: [&str; 21] = [
     "authors",
     "notes",
     "note_revisions",
@@ -24,6 +24,8 @@ const V2_TABLES: [&str; 19] = [
     "note_revision_cleanup",
     "note_titles",
     "note_publication_titles",
+    "note_publication_tags",
+    "note_search",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
@@ -107,6 +109,22 @@ fn sqlite_change_feed_equivalent_differs_only_in_sequence_column() {
     );
 }
 
+#[test]
+fn sqlite_discovery_equivalent_differs_only_in_search_vector_type() {
+    let postgres = include_str!("../migrations/012_v2_public_discovery.sql");
+    let sqlite = include_str!("sqlite/012_v2_public_discovery.sql");
+    fn body(text: &str) -> Vec<String> {
+        text.lines()
+            .filter(|line| !line.starts_with("--") && !line.contains("USING GIN"))
+            .map(|line| line.replace("TSVECTOR", "TEXT"))
+            .collect()
+    }
+    assert_eq!(body(postgres), body(sqlite));
+    assert!(postgres.contains("search_vector TSVECTOR NOT NULL"));
+    assert!(postgres.contains("ON note_search USING GIN(search_vector)"));
+    assert!(sqlite.contains("search_vector TEXT NOT NULL"));
+}
+
 #[tokio::test]
 async fn schema_has_no_json_array_or_body_columns() {
     let store = Store::fixture().await;
@@ -143,6 +161,8 @@ async fn schema_has_no_json_array_or_body_columns() {
         include_str!("../migrations/009_v2_note_titles.sql"),
         include_str!("../migrations/010_v2_publication_titles.sql"),
         include_str!("../migrations/011_v2_project_listing.sql"),
+        include_str!("../migrations/012_v2_public_discovery.sql"),
+        include_str!("sqlite/012_v2_public_discovery.sql"),
     ];
     for text in migrations {
         let lower = text.to_lowercase();

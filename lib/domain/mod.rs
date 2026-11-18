@@ -1,3 +1,4 @@
+pub mod discovery;
 pub mod editor_rules;
 pub mod links;
 pub mod names;

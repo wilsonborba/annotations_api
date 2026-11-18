@@ -664,6 +664,7 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
         json!({"id": "k3", "kind": "task_card", "task_id": "task-78", "restricted": true})
     );
     assert_eq!(public["title"], "Public title");
+    assert_eq!(public["tags"], json!(["Biology"]));
     // The whole public answer has only the public fields.
     let mut keys: Vec<&String> = public.as_object().unwrap().keys().collect();
     keys.sort();
@@ -671,11 +672,15 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
         keys,
         [
             "author_id",
+            "author_name",
+            "can_switch_view",
             "default_view",
             "language",
             "note_id",
             "published_at",
             "representations",
+            "summary",
+            "tags",
             "title",
             "typed_uses_earlier_revision",
             "views"

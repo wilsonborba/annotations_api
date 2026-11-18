@@ -88,13 +88,12 @@ pub async fn catalog_write(store: &Store, body: Value) -> Result<Value> {
     store.cache.invalidate().await;
     Ok(json!({"saved":true}))
 }
+/// `GET /catalog`: the shared metadata that current features use: publication
+/// channels and languages. No topic list and no default tag: note tags are
+/// optional and added by their owners only.
 pub async fn catalog(store: &Store) -> Result<Value> {
     let mut out = json!({});
-    for (table, idcol, namecol) in [
-        ("channels", "id", "name"),
-        ("topics", "id", "name"),
-        ("languages", "code", "label"),
-    ] {
+    for (table, idcol, namecol) in [("channels", "id", "name"), ("languages", "code", "label")] {
         let rows = sqlx::query(&format!(
             "SELECT {idcol} AS id,{namecol} AS name FROM {table} ORDER BY {idcol}"
         ))

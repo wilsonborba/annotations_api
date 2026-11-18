@@ -79,6 +79,25 @@ pub const NOTE_API_LIMITS: NoteApiLimits = NoteApiLimits {
     default_page: 50,
     max_page: 100,
 };
+/// Limits of public discovery (`/notes`, `/authors`, `/projects`) and its search index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiscoveryLimits {
+    /// Characters of the short summary taken from the published Typed text.
+    pub summary_chars: usize,
+    /// Characters in the search text `q`.
+    pub max_query_chars: usize,
+    /// Characters in one search term; longer words are not indexed.
+    pub max_term_chars: usize,
+    /// Distinct search terms of one published note.
+    pub max_terms: usize,
+}
+/// Default discovery limits. The summary limit matches the CHECK of `note_search.summary`.
+pub const DISCOVERY_LIMITS: DiscoveryLimits = DiscoveryLimits {
+    summary_chars: 200,
+    max_query_chars: 200,
+    max_term_chars: 100,
+    max_terms: 20_000,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,
