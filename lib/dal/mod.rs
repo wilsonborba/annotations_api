@@ -11,8 +11,8 @@ pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
-/// Migrations in apply order for SQLite fixtures. 005, 008, 012 and 013 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 17] = [
+/// Migrations in apply order for SQLite fixtures. 005, 008, 012, 013 and 018 use their tested SQLite equivalents.
+pub const SQLITE_MIGRATIONS: [&str; 18] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -30,6 +30,7 @@ pub const SQLITE_MIGRATIONS: [&str; 17] = [
     include_str!("../../migrations/015_v2_model_downloads.sql"),
     include_str!("../../migrations/016_v2_transcription_runs.sql"),
     include_str!("../../migrations/017_v2_training_feedback.sql"),
+    include_str!("../../tests/sqlite/018_v2_file_previews.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {

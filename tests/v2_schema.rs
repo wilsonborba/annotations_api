@@ -89,12 +89,12 @@ async fn project(db: &AnyPool, id: &str, owner: &str, name: &str) -> Result<(), 
 #[tokio::test]
 async fn migrations_apply_on_clean_database_and_rerun_safely() {
     let store = Store::fixture().await;
-    // SQLite has no ADD COLUMN IF NOT EXISTS: the rerun skips the one ADD COLUMN of
-    // 013. The PostgreSQL file uses IF NOT EXISTS (checked below and on PostgreSQL).
+    // SQLite has no ADD COLUMN IF NOT EXISTS: the rerun skips the ADD COLUMN of 013
+    // and 018. The PostgreSQL files use IF NOT EXISTS (checked below and on PostgreSQL).
     for migration in SQLITE_MIGRATIONS {
         let rerun: String = migration
             .lines()
-            .filter(|l| !l.starts_with("ALTER TABLE files ADD COLUMN filename"))
+            .filter(|l| !l.starts_with("ALTER TABLE files ADD COLUMN "))
             .collect::<Vec<_>>()
             .join("\n");
         run(&store.db, &rerun).await.unwrap();
@@ -102,6 +102,10 @@ async fn migrations_apply_on_clean_database_and_rerun_safely() {
     assert!(
         include_str!("../migrations/013_v2_managed_files.sql")
             .contains("ALTER TABLE files ADD COLUMN IF NOT EXISTS filename")
+    );
+    assert!(
+        include_str!("../migrations/018_v2_file_previews.sql")
+            .contains("ALTER TABLE files ADD COLUMN IF NOT EXISTS preview")
     );
     for table in V2_TABLES {
         let sql =
@@ -590,6 +594,45 @@ fn sqlite_managed_files_equivalent_differs_only_in_value_lists() {
     for text in [postgres, sqlite] {
         let lower = text.to_lowercase();
         for word in ["json", "array", "[]", "insert into", "trash"] {
+            assert!(!lower.contains(word), "migration contains {word}");
+        }
+    }
+}
+
+#[test]
+fn sqlite_file_previews_equivalent_differs_only_in_the_column_statement() {
+    let postgres = include_str!("../migrations/018_v2_file_previews.sql");
+    let sqlite = include_str!("sqlite/018_v2_file_previews.sql");
+    fn body(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|line| !line.starts_with("--") && !line.starts_with("ALTER TABLE files "))
+            .collect()
+    }
+    assert_eq!(body(postgres), body(sqlite));
+    assert!(
+        postgres.contains("CHECK(preview IN (0,1))") && sqlite.contains("CHECK(preview IN (0,1))")
+    );
+    for line in postgres
+        .lines()
+        .filter(|l| l.to_lowercase().contains("alter "))
+    {
+        assert!(
+            line.starts_with("ALTER TABLE files ADD COLUMN IF NOT EXISTS preview ")
+                || line.contains("files_preview_values"),
+            "{line}"
+        );
+    }
+    for text in [postgres, sqlite] {
+        let lower = text.to_lowercase();
+        for word in [
+            "json",
+            "array",
+            "[]",
+            "insert into",
+            "delete ",
+            "drop table",
+            "drop column",
+        ] {
             assert!(!lower.contains(word), "migration contains {word}");
         }
     }

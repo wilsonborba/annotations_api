@@ -195,15 +195,16 @@ pub(crate) async fn stream(
     Ok(response)
 }
 
-/// The file bytes with safe headers: the stored type, `nosniff`, a sandbox policy
-/// so no script runs from an upload, and a download disposition for non-images.
+/// The file bytes with safe headers: the verified type or `application/octet-stream`,
+/// `nosniff`, a sandbox policy so no script runs from an upload, and a download
+/// disposition for every file that is not a verified image.
 pub(crate) async fn send(
     app: &App,
     download: &Download,
     headers: &HeaderMap,
 ) -> Result<Response, NoteError> {
-    let content_type = HeaderValue::from_str(&download.file.content_type)
-        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+    let content_type = HeaderValue::from_str(download.served_type())
+        .unwrap_or(HeaderValue::from_static(files::GENERIC_TYPE));
     let mut response = stream(
         app,
         download.fsm_reference(),

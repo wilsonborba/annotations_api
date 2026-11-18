@@ -174,10 +174,8 @@ pub async fn download(
     crate::domain::transfers::download(&app.store, &code, &id, now()).await?;
     let mut response =
         axum::response::Response::new(rooms::download_body(body, record.expires_at)?);
-    let inline = matches!(
-        record.content_type.as_str(),
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/avif"
-    );
+    // Only verified images open in place; every other file is a download.
+    let inline = record.preview && record.content_type.starts_with("image/");
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         if inline {

@@ -8,6 +8,10 @@
 //!   from the bytes before anything reaches FSM, and only then sets `ready`. A
 //!   `ready` file is immutable: the same bytes again are accepted, other bytes are
 //!   refused. Replace means a new file.
+//! - A note attachment may have any type and becomes a file card. Only a type in
+//!   `PREVIEW_TYPES` whose bytes pass the byte check gets a preview; every other
+//!   file is served as `application/octet-stream`, as a download. FSM receives
+//!   the declared type only when the bytes pass its byte check.
 //! - Notes, publications, pending saves, transcriptions and content jobs hold
 //!   `file_references` rows. Release (`DELETE`) removes the file row only while no
 //!   reference exists, and queues its FSM item in `file_cleanup`. The cleanup task
@@ -61,23 +65,17 @@ impl Purpose {
             Self::ContentJob => FILE_LIMITS.content_job_bytes,
         }
     }
-    /// The content types accepted for this purpose. Every type has a byte check
-    /// in `matches_type`; scriptable types (HTML, SVG, JavaScript) are never accepted.
-    pub fn content_types(self) -> &'static [&'static str] {
+    /// The content types accepted for this purpose. `None` means every valid media
+    /// type: a note attachment of any type becomes a file card (B9.1), and only
+    /// `PREVIEW_TYPES` verified from the bytes get a preview. The listed types of
+    /// the other purposes all have a byte check in `matches_type`.
+    pub fn content_types(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Attachment => &[
-                "image/png",
-                "image/jpeg",
-                "image/gif",
-                "image/webp",
-                "image/avif",
-                "application/pdf",
-                "text/plain",
-                "text/csv",
-                "application/octet-stream",
-            ],
-            Self::Transcription => &["image/png", "image/jpeg", "image/webp", "application/pdf"],
-            Self::ContentJob => &[
+            Self::Attachment => None,
+            Self::Transcription => {
+                Some(&["image/png", "image/jpeg", "image/webp", "application/pdf"])
+            }
+            Self::ContentJob => Some(&[
                 "image/png",
                 "image/jpeg",
                 "image/gif",
@@ -92,9 +90,44 @@ impl Purpose {
                 "audio/webm",
                 "video/mp4",
                 "video/webm",
-            ],
+            ]),
         }
     }
+}
+
+/// Types that get a preview when the bytes are of this type: images on paper,
+/// the PDF preview card and the CSV table card. Every type has a byte check in
+/// `matches_type`. No scriptable type (HTML, SVG, JavaScript) is in the list.
+pub const PREVIEW_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "application/pdf",
+    "text/csv",
+];
+
+/// The type of a file without verified type: FSM receives it, downloads send
+/// it, and an attachment reserved without a type uses it.
+pub const GENERIC_TYPE: &str = "application/octet-stream";
+
+/// True for a lowercase `type/subtype` media type without parameters (RFC 6838
+/// restricted names: 1 to 127 characters, a letter or digit first).
+pub fn valid_media_type(value: &str) -> bool {
+    let name = |part: &str| {
+        part.len() <= 127
+            && part
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"!#$&^_.+-".contains(&b))
+    };
+    value
+        .split_once('/')
+        .is_some_and(|(kind, subtype)| name(kind) && name(subtype))
 }
 
 /// Bytes at the start of a file that the type check reads.
@@ -212,11 +245,19 @@ impl Reservation {
                 "filename uses 1 to 255 characters without control characters or path separators",
             ));
         }
-        let content_type = text("content_type")
+        let mut content_type = text("content_type")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase();
-        if !purpose.content_types().contains(&content_type.as_str()) {
+        if content_type.is_empty() && purpose == Purpose::Attachment {
+            // A device that cannot name the type still gets a file card.
+            content_type = GENERIC_TYPE.to_string();
+        }
+        let accepted = match purpose.content_types() {
+            Some(list) => list.contains(&content_type.as_str()),
+            None => valid_media_type(&content_type),
+        };
+        if !accepted {
             return Err(invalid(
                 "unsupported_content_type",
                 "content_type is not accepted for this purpose",
@@ -263,6 +304,9 @@ pub struct Stored {
     pub checksum: String,
     pub purpose: String,
     pub status: String,
+    /// The bytes are of the type in `content_type` and that type has a preview
+    /// (`PREVIEW_TYPES`). Every other file is a file card served as a download.
+    pub preview: bool,
     pub created_at: i64,
     pub updated_at: i64,
     fsm_reference: Option<String>,
@@ -278,6 +322,7 @@ impl Stored {
             checksum: row.try_get("sha256")?,
             purpose: row.try_get("purpose")?,
             status: row.try_get("status")?,
+            preview: row.try_get::<i64, _>("preview")? == 1,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
             fsm_reference: row.try_get("fsm_reference")?,
@@ -293,13 +338,14 @@ impl Stored {
             "checksum": self.checksum,
             "purpose": self.purpose,
             "status": self.status,
+            "preview": self.preview,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         })
     }
 }
 
-const COLUMNS: &str = "file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,created_at,updated_at,fsm_reference";
+const COLUMNS: &str = "file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,preview,created_at,updated_at,fsm_reference";
 
 async fn load(store: &Store, owner: &str, file_id: &str) -> R<Stored> {
     let row = sqlx::query(&format!(
@@ -421,15 +467,45 @@ where
 }
 
 /// Check received bytes against the reservation: size, SHA-256, then the real type.
-fn verify(file: &Stored, received: &Received) -> R<()> {
-    verify_received(file.size, &file.checksum, &file.content_type, received)
+fn verify(file: &Stored, received: &Received) -> R<Checked> {
+    let purpose = Purpose::parse(&file.purpose).unwrap_or(Purpose::Attachment);
+    verify_received(
+        file.size,
+        &file.checksum,
+        &file.content_type,
+        purpose,
+        received,
+    )
 }
+
+/// The type result of verified bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Checked {
+    /// The bytes are of the reserved type (a byte check passed).
+    pub(crate) typed: bool,
+    /// `typed`, and the type has a preview.
+    pub(crate) preview: bool,
+}
+impl Checked {
+    /// The type that FSM receives: the reserved type only when the bytes are of it.
+    pub(crate) fn storage_type<'a>(&self, content_type: &'a str) -> &'a str {
+        if self.typed {
+            content_type
+        } else {
+            GENERIC_TYPE
+        }
+    }
+}
+
+/// Size and SHA-256 must match. A note attachment whose bytes are not of the
+/// reserved type stays a file card without preview; the other purposes refuse it.
 pub(crate) fn verify_received(
     size: i64,
     checksum: &str,
     content_type: &str,
+    purpose: Purpose,
     received: &Received,
-) -> R<()> {
+) -> R<Checked> {
     if received.size != size {
         return Err(invalid(
             "size_mismatch",
@@ -443,13 +519,17 @@ pub(crate) fn verify_received(
         ));
     }
     let text = matches!(content_type, "text/plain" | "text/csv");
-    if !matches_type(content_type, &received.head) || (text && !received.text_valid) {
+    let typed = matches_type(content_type, &received.head) && (!text || received.text_valid);
+    if !typed && purpose != Purpose::Attachment {
         return Err(invalid(
             "content_type_mismatch",
             "The bytes are not of the reserved content type",
         ));
     }
-    Ok(())
+    Ok(Checked {
+        typed,
+        preview: typed && PREVIEW_TYPES.contains(&content_type),
+    })
 }
 
 /// The media type of a Content-Type header value, without parameters.
@@ -548,14 +628,14 @@ where
     B: AsRef<[u8]>,
 {
     let received = receive(store, body, file.size, true).await?;
-    verify(file, &received)?;
+    let checked = verify(file, &received)?;
     let temp = received.temp.as_ref().ok_or_else(unavailable)?;
     let item = store
         .files
         .upload_path(
             temp,
             &file.filename,
-            &file.content_type,
+            checked.storage_type(&file.content_type),
             &album(&file.file_id),
             file.size,
         )
@@ -564,8 +644,9 @@ where
     let same = item.size_bytes == file.size
         && (item.checksum_sha256.is_empty() || item.checksum_sha256 == file.checksum);
     let finished = if same {
-        sqlx::query("UPDATE files SET status='ready',fsm_reference=$1,updated_at=$2 WHERE file_id=$3 AND status='uploading' AND updated_at=$4")
+        sqlx::query("UPDATE files SET status='ready',fsm_reference=$1,preview=$2,updated_at=$3 WHERE file_id=$4 AND status='uploading' AND updated_at=$5")
             .bind(&item.key)
+            .bind(i64::from(checked.preview))
             .bind(core::now().max(claim + 1))
             .bind(&file.file_id)
             .bind(claim)
@@ -612,9 +693,18 @@ impl Download {
     pub fn fsm_reference(&self) -> &str {
         self.file.fsm_reference.as_deref().unwrap_or_default()
     }
-    /// Images open in place; every other type downloads as an attachment.
+    /// Verified images open in place; every other file downloads as an attachment.
     pub fn inline(&self) -> bool {
-        self.file.content_type.starts_with("image/")
+        self.file.preview && self.file.content_type.starts_with("image/")
+    }
+    /// The Content-Type of the bytes: the stored type only when it has a verified
+    /// preview, so a declared type never reaches a browser unchecked.
+    pub fn served_type(&self) -> &str {
+        if self.file.preview {
+            &self.file.content_type
+        } else {
+            GENERIC_TYPE
+        }
     }
 }
 
