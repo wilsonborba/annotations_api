@@ -37,6 +37,9 @@ pub struct Reservation {
     pub status: Status,
     #[serde(default)]
     pub attempt: String,
+    /// The verified bytes are of a preview type (`domain::files::PREVIEW_TYPES`).
+    #[serde(default)]
+    pub preview: bool,
 }
 #[derive(Clone)]
 pub enum Transfers {

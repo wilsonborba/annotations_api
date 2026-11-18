@@ -182,27 +182,114 @@ async fn failed_size_checksum_and_type_checks_never_publish_bytes_and_retry_succ
             .as_u16(),
         409
     );
+    // Unverified preview type in Instant: accepted as file card with preview=false and served as attachment.
     let mut input = fixture::metadata(b"hello");
     input.content_type = "image/png".into();
     let image = transfers::begin(&store, "checks", "uploader", input, None, now())
         .await
         .unwrap();
-    assert!(
-        transfers::upload(
+    let uploaded = transfers::upload(
+        &store,
+        "checks",
+        &image.id,
+        "uploader",
+        Some("image/png"),
+        body(b"hello"),
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(!uploaded.preview);
+    assert_eq!(store.files.fixture_counts(), Some((2, 1)));
+}
+
+#[tokio::test]
+async fn instant_accepts_docx_and_zip_and_serves_unverified_as_attachment() {
+    use annotations_api::{domain::App, presentation};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    let store = fixture::store().await;
+    fixture::create(&store, "cards", now()).await;
+    let app = presentation::router(App {
+        store: store.clone(),
+    });
+    let docx_bytes = b"PK\x03\x04docx-instant".to_vec();
+    let zip_bytes = b"PK\x03\x04zip-instant".to_vec();
+    let docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    for (name, mime, bytes) in [
+        ("notes.docx", docx_mime, docx_bytes.as_slice()),
+        ("bundle.zip", "application/zip", zip_bytes.as_slice()),
+        (
+            "spoof.png",
+            "image/png",
+            b"<html>not-a-png</html>".as_slice(),
+        ),
+    ] {
+        let mut meta = fixture::metadata(bytes);
+        meta.filename = name.into();
+        meta.content_type = mime.into();
+        let reserved = transfers::begin(&store, "cards", "uploader", meta, None, now())
+            .await
+            .unwrap();
+        let ready = transfers::upload(
             &store,
-            "checks",
-            &image.id,
+            "cards",
+            &reserved.id,
             "uploader",
-            Some("image/png"),
-            body(b"hello"),
-            now()
+            Some(mime),
+            body(bytes),
+            now(),
         )
         .await
-        .unwrap_err()
-        .1
-        .starts_with("content_type_mismatch:")
-    );
-    assert_eq!(store.files.fixture_counts(), Some((1, 1)));
+        .unwrap();
+        assert_eq!(ready.status, Status::Ready);
+        assert!(!ready.preview, "{name}");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/instant/cards/files/{}", ready.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{name}");
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/octet-stream"
+        );
+        assert!(
+            response
+                .headers()
+                .get("content-disposition")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("attachment;")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "nosniff"
+        );
+    }
 }
 #[tokio::test]
 async fn concurrent_binary_retry_has_one_claim_one_alias_and_one_registry_entry() {

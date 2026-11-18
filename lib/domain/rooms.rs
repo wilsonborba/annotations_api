@@ -18,6 +18,9 @@ pub struct File {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: i64,
+    /// The bytes are of a preview type; other files are file cards and downloads.
+    #[serde(default)]
+    pub preview: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Room {
@@ -86,7 +89,7 @@ impl Room {
             "document":self.document,"item_revisions":self.item_revisions,
             "max_file_bytes":UPLOAD_BYTES,"max_ip_bytes":UPLOAD_BYTES,
             "files":self.files.iter().map(|f|json!({"id":f.id,"filename":f.filename,
-                "content_type":f.content_type,"size_bytes":f.size_bytes,
+                "content_type":f.content_type,"size_bytes":f.size_bytes,"preview":f.preview,
                 "url":format!("/instant/{}/files/{}",self.code,f.id)})).collect::<Vec<_>>()})
     }
     fn item(&self, id: &str) -> Option<&Value> {

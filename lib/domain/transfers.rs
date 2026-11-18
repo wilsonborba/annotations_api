@@ -51,7 +51,8 @@ impl Metadata {
 impl Reservation {
     pub fn public(&self) -> Value {
         json!({"file_id":self.id,"filename":self.filename,"content_type":self.content_type,
-            "size":self.bytes,"checksum":self.checksum,"status":self.status,"expires_at":self.expires_at,
+            "size":self.bytes,"checksum":self.checksum,"status":self.status,"preview":self.preview,
+            "expires_at":self.expires_at,
             "max_file_bytes":UPLOAD_BYTES,"max_ip_bytes":UPLOAD_BYTES,
             "upload_url":format!("/instant/{}/files/{}/content",self.code,self.id),
             "url":if self.status==Status::Ready {Some(format!("/instant/{}/files/{}",self.code,self.id))} else {None}})
@@ -96,6 +97,7 @@ pub async fn begin(
         checksum: input.checksum,
         status: Status::Reserved,
         attempt: String::new(),
+        preview: false,
     };
     let saved = store.transfers.reserve(requested.clone(), now).await?;
     if saved.code != requested.code
@@ -182,18 +184,23 @@ where
         let received = files::receive(store, body, record.bytes, !ready)
             .await
             .map_err(file_error)?;
-        if let Err(error) = files::verify_received(
+        // Instant uses the note attachment rule: any type, preview only when verified.
+        let checked = match files::verify_received(
             record.bytes,
             &record.checksum,
             &record.content_type,
+            files::Purpose::Attachment,
             &received,
         ) {
-            return Err(if ready {
-                Error::conflict("file_immutable: A ready file never changes")
-            } else {
-                file_error(error)
-            });
-        }
+            Ok(checked) => checked,
+            Err(error) => {
+                return Err(if ready {
+                    Error::conflict("file_immutable: A ready file never changes")
+                } else {
+                    file_error(error)
+                });
+            }
+        };
         authorized(store, code, id, Some(ip), core::now()).await?;
         if ready {
             register(store, &record, core::now()).await?;
@@ -221,7 +228,7 @@ where
                     .upload_path(
                         path,
                         &record.filename,
-                        &record.content_type,
+                        checked.storage_type(&record.content_type),
                         &record.album,
                         record.bytes,
                     )
@@ -239,6 +246,7 @@ where
         let mut completed = claim.clone();
         completed.status = Status::Ready;
         completed.file_key = Some(file.key);
+        completed.preview = checked.preview;
         if !store
             .transfers
             .compare_set(&claim, &completed, core::now())
@@ -294,6 +302,7 @@ async fn register(store: &Store, record: &Reservation, now: i64) -> Result<()> {
             filename: record.filename.clone(),
             content_type: record.content_type.clone(),
             size_bytes: record.bytes,
+            preview: record.preview,
         });
         rooms::validate(store, &room).await?;
         room.revision += 1;

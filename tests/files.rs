@@ -317,34 +317,40 @@ async fn size_checksum_or_type_mismatch_never_becomes_ready() {
 #[tokio::test]
 async fn real_file_type_is_checked_from_the_bytes() {
     let (store, router) = setup().await;
-    // A script declared as an image, with the right size and checksum.
+    // Transcription and content_job still refuse mismatched bytes and unlisted types.
     let script = b"<html><script>alert(1)</script></html>".to_vec();
-    let r = reserve(&router, A, "x.png", "image/png", &script, "attachment").await;
+    let r = reserve(&router, A, "x.png", "image/png", &script, "transcription").await;
     let id = r.json()["file_id"].as_str().unwrap().to_string();
     let r = put(&router, A, &id, "image/png", script.clone()).await;
     assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(r.json()["code"], "content_type_mismatch");
     assert_eq!(status_of(&store, &id).await, "failed");
-    // A PNG declared as a PDF.
     let image = png(9, 40);
-    let r = reserve(&router, A, "x.pdf", "application/pdf", &image, "attachment").await;
+    let r = reserve(
+        &router,
+        A,
+        "x.pdf",
+        "application/pdf",
+        &image,
+        "content_job",
+    )
+    .await;
     let id = r.json()["file_id"].as_str().unwrap().to_string();
     let r = put(&router, A, &id, "application/pdf", image).await;
     assert_eq!(r.json()["code"], "content_type_mismatch");
-    // Text must be UTF-8 without NUL, also across chunk ends.
     let binary = vec![b'a', 0xff, 0xfe, b'b'];
-    let r = reserve(&router, A, "x.txt", "text/plain", &binary, "attachment").await;
+    let r = reserve(&router, A, "x.txt", "text/plain", &binary, "content_job").await;
     let id = r.json()["file_id"].as_str().unwrap().to_string();
     let r = put(&router, A, &id, "text/plain", binary).await;
     assert_eq!(r.json()["code"], "content_type_mismatch");
     assert_eq!(fsm(&store), (0, 0));
-    // Scriptable types are never accepted.
+    // Scriptable types are never accepted for transcription or content_job.
     for kind in ["text/html", "image/svg+xml", "application/javascript"] {
-        let r = reserve(&router, A, "x", kind, b"<svg/>", "attachment").await;
+        let r = reserve(&router, A, "x", kind, b"<svg/>", "transcription").await;
         assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(r.json()["code"], "unsupported_content_type");
     }
-    // Byte signatures of the accepted types.
+    // Byte signatures of the preview and non-attachment types.
     assert!(files::matches_type("image/jpeg", b"\xff\xd8\xff\xe0"));
     assert!(files::matches_type("image/gif", b"GIF89a.."));
     assert!(files::matches_type("image/webp", b"RIFF\0\0\0\0WEBPVP8 "));
@@ -359,17 +365,17 @@ async fn real_file_type_is_checked_from_the_bytes() {
     assert!(files::matches_type("application/pdf", b"%PDF-1.7"));
     assert!(!files::matches_type("application/pdf", b"<html>"));
     assert!(!files::matches_type("image/png", b"\x89PNG"));
-    // Every accepted type of every purpose has a byte check.
-    for purpose in [
-        Purpose::Attachment,
-        Purpose::Transcription,
-        Purpose::ContentJob,
-    ] {
-        for kind in purpose.content_types() {
+    // Every preview type and every non-attachment type has a byte check.
+    for kind in files::PREVIEW_TYPES {
+        assert!(
+            !files::matches_type(kind, b"") || kind.starts_with("text/"),
+            "{kind}"
+        );
+    }
+    for purpose in [Purpose::Transcription, Purpose::ContentJob] {
+        for kind in purpose.content_types().unwrap() {
             assert!(
-                !files::matches_type(kind, b"")
-                    || kind.starts_with("text/")
-                    || *kind == "application/octet-stream",
+                !files::matches_type(kind, b"") || kind.starts_with("text/"),
                 "{kind}"
             );
         }
@@ -424,7 +430,7 @@ async fn reserve_checks_fields_purpose_limits_and_identity() {
         ("filename", json!("a".repeat(256)), "invalid_filename"),
         (
             "content_type",
-            json!("image/bmp"),
+            json!("not-a-media-type"),
             "unsupported_content_type",
         ),
         ("size", json!(0), "invalid_size"),
@@ -478,12 +484,145 @@ async fn reserve_checks_fields_purpose_limits_and_identity() {
             "created_at",
             "file_id",
             "filename",
+            "preview",
             "purpose",
             "size",
             "status",
             "updated_at"
         ]
     );
+}
+
+// Checklist (#27 redo): any file type uploads as a file card; unverified types get no preview
+// and are served as attachment with nosniff.
+
+#[tokio::test]
+async fn any_file_type_uploads_as_file_card_and_unverified_gets_no_preview() {
+    let (_store, router) = setup().await;
+    let docx_bytes = b"PK\x03\x04docx-body".to_vec();
+    let zip_bytes = b"PK\x03\x04zip-body".to_vec();
+    let docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    for (name, mime, bytes) in [
+        ("report.docx", docx_mime, &docx_bytes),
+        ("archive.zip", "application/zip", &zip_bytes),
+    ] {
+        let r = reserve(&router, A, name, mime, bytes, "attachment").await;
+        assert_eq!(r.status, StatusCode::CREATED, "{name}: {:?}", r.json());
+        let id = r.json()["file_id"].as_str().unwrap().to_string();
+        let r = put(&router, A, &id, mime, bytes.clone()).await;
+        assert_eq!(r.status, StatusCode::OK, "{name}: {:?}", r.json());
+        assert_eq!(r.json()["status"], "ready");
+        assert_eq!(r.json()["preview"], false);
+
+        // Attach the file as a file_card in a note.
+        let note_doc = json!({
+            "page": {"width": 1000, "background": {"kind": "blank"}},
+            "items": [
+                {"id": "f1", "kind": "file_card", "x": 0, "y": 0, "width": 320, "height": 80,
+                 "file_id": id}
+            ]
+        });
+        let create = call(
+            &router,
+            "POST",
+            "/me/notes",
+            Some(A),
+            &[("content-type", "application/json")],
+            json!({
+                "client_note_id": format!("card-{name}"),
+                "main_representation": "original",
+                "representations": {
+                    "original": {"document": note_doc},
+                    "typed": {"document": typed("Card")}
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        )
+        .await;
+        assert_eq!(create.status, StatusCode::CREATED, "{:?}", create.json());
+
+        let dl = call(
+            &router,
+            "GET",
+            &format!("/me/files/{id}/content"),
+            Some(A),
+            &[],
+            vec![],
+        )
+        .await;
+        assert_eq!(dl.status, StatusCode::OK);
+        assert_eq!(dl.bytes, *bytes);
+        assert_eq!(
+            dl.headers.get("content-type").unwrap().to_str().unwrap(),
+            "application/octet-stream"
+        );
+        assert!(
+            dl.headers
+                .get("content-disposition")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("attachment;")
+        );
+        assert_eq!(
+            dl.headers
+                .get("x-content-type-options")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "nosniff"
+        );
+    }
+
+    // A file whose content does not match a preview type gets no preview and is served as attachment.
+    let fake_png = b"<html><script>alert(1)</script></html>".to_vec();
+    let r = reserve(&router, A, "fake.png", "image/png", &fake_png, "attachment").await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let fake_id = r.json()["file_id"].as_str().unwrap().to_string();
+    let r = put(&router, A, &fake_id, "image/png", fake_png.clone()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["status"], "ready");
+    assert_eq!(r.json()["preview"], false);
+    let dl = call(
+        &router,
+        "GET",
+        &format!("/me/files/{fake_id}/content"),
+        Some(A),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(dl.status, StatusCode::OK);
+    assert_eq!(
+        dl.headers.get("content-type").unwrap().to_str().unwrap(),
+        "application/octet-stream"
+    );
+    assert!(
+        dl.headers
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    assert_eq!(
+        dl.headers
+            .get("x-content-type-options")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "nosniff"
+    );
+
+    // Verified preview types (PNG, PDF) still get preview=true.
+    let pdf = b"%PDF-1.7\n%ok".to_vec();
+    let r = reserve(&router, A, "doc.pdf", "application/pdf", &pdf, "attachment").await;
+    let pdf_id = r.json()["file_id"].as_str().unwrap().to_string();
+    let r = put(&router, A, &pdf_id, "application/pdf", pdf).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["preview"], true);
 }
 
 // Checklist: two owners upload the same bytes: one FSM blob, two references, no cross access.
