@@ -98,6 +98,12 @@ pub async fn reconcile(store: &Store, now: i64, settings: &SaveSettings) -> Resu
 
 pub fn spawn(store: Store) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        if crate::domain::content_jobs::resume_unfinished(&store)
+            .await
+            .is_err()
+        {
+            tracing::warn!("Unfinished content job recovery failed at startup");
+        }
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             interval.tick().await;

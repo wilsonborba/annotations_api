@@ -9,17 +9,20 @@ CREATE TABLE IF NOT EXISTS content_jobs (
  kind TEXT NOT NULL CHECK(kind IN ('extraction','study_notes')),
  request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
  prompt_text TEXT NOT NULL DEFAULT '',
- status TEXT NOT NULL CHECK(status IN ('queued','running','completed','partial','cancelled','failed')),
+ status TEXT NOT NULL CHECK(status IN ('queued','uploading','running','completed','partial','cancelled','failed')),
  cortex_session_id TEXT,
  cortex_output_id TEXT,
  event_cursor BIGINT NOT NULL DEFAULT 0 CHECK(event_cursor >= 0),
- draft_text TEXT NOT NULL DEFAULT '',
+ draft_document_id TEXT,
+ draft_schema_name TEXT,
+ draft_schema_version BIGINT,
  draft_saved BIGINT NOT NULL DEFAULT 0 CHECK(draft_saved IN (0,1)),
  cortex_cleaned BIGINT NOT NULL DEFAULT 0 CHECK(cortex_cleaned IN (0,1)),
  error_code TEXT,
  error_message TEXT,
  created_at BIGINT NOT NULL CHECK(created_at >= 0),
  updated_at BIGINT NOT NULL CHECK(updated_at >= 0),
+ FOREIGN KEY(draft_schema_name,draft_schema_version) REFERENCES schema_versions(name,version) ON DELETE RESTRICT,
  UNIQUE(owner_id,client_job_id)
 );
 CREATE INDEX IF NOT EXISTS content_jobs_by_owner ON content_jobs(owner_id,created_at);

@@ -138,16 +138,19 @@ async fn setup(cortex: Arc<MockCortex>) -> (Store, Router) {
     let mut store = Store::fixture().await;
     store.cortex = cortex.clone();
     *cortex.store_ref.lock().unwrap() = Some(store.clone());
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/document_schema/families/note-original.v1.json");
-    let draft: annotations_api::domain::schemas::Draft =
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    annotations_api::domain::schemas::draft(&store, draft)
-        .await
-        .unwrap();
-    annotations_api::domain::schemas::publish(&store, "note-original", 1)
-        .await
-        .unwrap();
+    for name in ["note-original", "content-job-draft"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/document_schema/families/{name}.v1.json"
+        ));
+        let draft: annotations_api::domain::schemas::Draft =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        annotations_api::domain::schemas::draft(&store, draft)
+            .await
+            .unwrap();
+        annotations_api::domain::schemas::publish(&store, name, 1)
+            .await
+            .unwrap();
+    }
     let router = presentation::router(App {
         store: store.clone(),
     });
@@ -235,7 +238,7 @@ async fn default_disabled_returns_503() {
 #[tokio::test]
 async fn refresh_returns_same_job_without_duplicate_cortex_call_and_saves_draft_before_cleanup() {
     let cortex = MockCortex::new();
-    let (_store, router) = setup(cortex.clone()).await;
+    let (store, router) = setup(cortex.clone()).await;
     let fid = upload_ready_text(&router, A, b"Study material").await;
 
     let payload = json!({
@@ -290,7 +293,7 @@ async fn refresh_returns_same_job_without_duplicate_cortex_call_and_saves_draft_
     .await;
     assert_eq!(other_s, StatusCode::NOT_FOUND);
 
-    // Let Cortex finish; verify draft was saved BEFORE delete_chat was called.
+    // Let Cortex finish; verify CouchDB draft was saved BEFORE delete_chat was called.
     cortex.allow_finish.notify_waiters();
     for _ in 0..40 {
         let (_, cur) = call(
@@ -303,8 +306,14 @@ async fn refresh_returns_same_job_without_duplicate_cortex_call_and_saves_draft_
         .await;
         if cur["status"] == "completed" {
             assert_eq!(cur["draft_saved"], true);
-            assert_eq!(cur["draft_text"], "Extracted study summary draft");
+            assert_eq!(cur["draft_schema_version"], 1);
+            assert_eq!(cur["draft"]["format"], "markdown");
+            assert_eq!(cur["draft"]["text"], "Extracted study summary draft");
             assert_eq!(cur["cortex_cleaned"], true);
+            let doc_id = cur["draft_document_id"].as_str().unwrap();
+            let doc = store.docs.get(doc_id).await.unwrap();
+            assert_eq!(doc["schema_name"], "content-job-draft");
+            assert_eq!(doc["body"]["text"], "Extracted study summary draft");
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -377,7 +386,7 @@ async fn cancel_preserves_partial_draft_and_leaves_note_unchanged() {
     assert_eq!(cs, StatusCode::OK, "{cancelled}");
     assert_eq!(cancelled["status"], "cancelled");
     assert_eq!(cancelled["draft_saved"], true);
-    assert_eq!(cancelled["draft_text"], "Partial study output");
+    assert_eq!(cancelled["draft"]["text"], "Partial study output");
     assert_eq!(cancelled["cortex_cleaned"], true);
 
     // Note revision is untouched.
@@ -390,4 +399,88 @@ async fn cancel_preserves_partial_draft_and_leaves_note_unchanged() {
     )
     .await;
     assert_eq!(note_after["revision"], 1);
+}
+
+#[tokio::test]
+async fn server_restart_resumes_started_job_without_second_cortex_call_and_fails_unstarted_job() {
+    let cortex = MockCortex::new();
+    let (store, router) = setup(cortex.clone()).await;
+
+    sqlx::query("INSERT INTO owners(id,display_name) VALUES($1,'') ON CONFLICT(id) DO NOTHING")
+        .bind(A)
+        .execute(&store.db)
+        .await
+        .unwrap();
+
+    // Job 1: left running with Cortex session/output ids from before a server restart.
+    sqlx::query(
+        "INSERT INTO content_jobs(job_id,owner_id,client_job_id,kind,request_hash,prompt_text,status,cortex_session_id,cortex_output_id,event_cursor,created_at,updated_at) VALUES('job-resumable',$1,'c-res','study_notes',$2,'hi','running','cx-sess-restart','cx-out-restart',2,100,100)",
+    )
+    .bind(A)
+    .bind("a".repeat(64))
+    .execute(&store.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO content_job_events(job_id,seq,stage,created_at) VALUES('job-resumable',1,'queued',100),('job-resumable',2,'running',100)",
+    )
+    .execute(&store.db)
+    .await
+    .unwrap();
+
+    // Job 2: left queued without Cortex ids (interrupted before start_chat).
+    sqlx::query(
+        "INSERT INTO content_jobs(job_id,owner_id,client_job_id,kind,request_hash,prompt_text,status,event_cursor,created_at,updated_at) VALUES('job-unstarted',$1,'c-unst','extraction',$2,'hi','queued',1,100,100)",
+    )
+    .bind(A)
+    .bind("b".repeat(64))
+    .execute(&store.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO content_job_events(job_id,seq,stage,created_at) VALUES('job-unstarted',1,'queued',100)",
+    )
+    .execute(&store.db)
+    .await
+    .unwrap();
+
+    let handled = annotations_api::domain::content_jobs::resume_unfinished(&store)
+        .await
+        .unwrap();
+    assert_eq!(handled, 2);
+
+    // Unstarted job truthfully fails with server_restarted.
+    let (_, failed) = call(
+        &router,
+        "GET",
+        "/me/content_jobs/job-unstarted",
+        Some(A),
+        None,
+    )
+    .await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["error"]["code"], "server_restarted");
+
+    // Started job resumes polling and finishes with zero duplicate upload/start calls.
+    cortex.allow_finish.notify_waiters();
+    for _ in 0..40 {
+        let (_, cur) = call(
+            &router,
+            "GET",
+            "/me/content_jobs/job-resumable",
+            Some(A),
+            None,
+        )
+        .await;
+        if cur["status"] == "completed" {
+            assert_eq!(cur["draft_saved"], true);
+            assert_eq!(cur["draft"]["text"], "Extracted study summary draft");
+            assert_eq!(cur["cortex_cleaned"], true);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(cortex.uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(cortex.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(cortex.deletes.load(Ordering::SeqCst), 1);
 }
