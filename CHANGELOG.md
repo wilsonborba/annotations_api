@@ -16,6 +16,7 @@
 - *(files)* Add managed file references with FSM deduplication and safe last-reference cleanup (#27)
 - *(files)* Stage uploads in the configurable UPLOAD_STAGING_DIR instead of the system temp folder (#27)
 - *(admin)* Add administrative note, project and file operations with the central access level (#26)
+- *(instant)* Validate v2 room documents with atomic edits, item revisions and fixed expiry (#29)
 
 ### 🐛 Bug Fixes
 

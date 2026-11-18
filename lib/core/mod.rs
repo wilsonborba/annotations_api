@@ -20,6 +20,8 @@ pub const LINK_PREVIEW_LIMITS: LinkPreviewLimits = LinkPreviewLimits {
 };
 
 pub const ROOM_SECONDS: i64 = 900;
+/// Attempts to merge an independent Instant write into a concurrently changed room.
+pub const ROOM_CAS_ATTEMPTS: usize = 16;
 pub const UPLOAD_BYTES: i64 = 50_000_000;
 pub const CACHE_SECONDS: u64 = 120;
 
