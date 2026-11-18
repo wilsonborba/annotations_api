@@ -21,6 +21,7 @@
 - *(models)* Register model releases with server CLI commands, keep one default with rollback and serve signed-in manifests without private fields (#31)
 - *(models)* Add account-bound model downloads that stream the shared release artifact from FSM with resumable HTTP Range reads (#32)
 - *(transcriptions)* Add server-owned transcription runs with real stage events over SSE, one local result per run, stale source checks and accepted Typed source revisions (#33)
+- *(training)* Store mandatory correction feedback of transcription runs as validated, untrusted training input with admin CLI export and removal (#34)
 
 ### 🐛 Bug Fixes
 

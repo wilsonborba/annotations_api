@@ -1,0 +1,18 @@
+{
+  "name": "training-feedback",
+  "version": 1,
+  "fields": [
+    {"path": "event_id", "field_type": "string", "required": true},
+    {"path": "segment_id", "field_type": "string", "required": true},
+    {"path": "source_item_ids", "field_type": "array", "required": false},
+    {"path": "strokes", "field_type": "array", "required": false},
+    {"path": "strokes[].x", "field_type": "array", "required": false},
+    {"path": "strokes[].y", "field_type": "array", "required": false},
+    {"path": "strokes[].t", "field_type": "array", "required": false},
+    {"path": "suggestion", "field_type": "string", "required": true},
+    {"path": "correction", "field_type": "string", "required": true},
+    {"path": "stage", "field_type": "string", "required": true},
+    {"path": "language", "field_type": "string", "required": true},
+    {"path": "model_version", "field_type": "string", "required": true}
+  ]
+}

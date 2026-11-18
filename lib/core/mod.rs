@@ -174,6 +174,42 @@ pub const TRANSCRIPTION_LIMITS: TranscriptionLimits = TranscriptionLimits {
     event_poll: std::time::Duration::from_secs(1),
     keep_alive: std::time::Duration::from_secs(15),
 };
+/// Bounds of correction feedback (`POST /me/transcriptions/{run_id}/feedback`) and of
+/// the training command line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrainingLimits {
+    /// Size of one feedback request body in bytes.
+    pub max_request_bytes: usize,
+    /// Events in one request.
+    pub max_events: usize,
+    /// Characters in the model suggestion or in the user correction.
+    pub max_text_chars: usize,
+    /// Ink item ids of the run that one event names.
+    pub max_source_items: usize,
+    /// Strokes in one event.
+    pub max_strokes: usize,
+    /// Samples in one stroke.
+    pub max_samples_per_stroke: usize,
+    /// Largest x or y of a sample, in integer 1/100 page units.
+    pub max_coordinate: i64,
+    /// Largest sample time, in ms from the stroke start.
+    pub max_sample_ms: i64,
+    /// Rows that one export or remove step reads at most.
+    pub batch: i64,
+}
+/// Default feedback bounds. One request stays far below the note body limit; the
+/// sample limit matches `NOTE_LIMITS`; pressure and tilt use the note stroke ranges.
+pub const TRAINING_LIMITS: TrainingLimits = TrainingLimits {
+    max_request_bytes: 2_000_000,
+    max_events: 100,
+    max_text_chars: 10_000,
+    max_source_items: 1_000,
+    max_strokes: 500,
+    max_samples_per_stroke: NOTE_LIMITS.max_samples_per_stroke,
+    max_coordinate: 100_000_000,
+    max_sample_ms: 600_000,
+    batch: 200,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,

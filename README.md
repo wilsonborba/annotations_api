@@ -34,6 +34,19 @@ drafting a note family version without validator code is rejected. Limits are in
 `lib/core` (`NOTE_LIMITS`). Canonical cases and the case format are in
 `tests/fixtures/document_schema/`.
 
+## Training feedback
+
+Correction feedback of a completed transcription run (`POST /me/transcriptions/{run_id}/feedback`)
+is validated against the published `training-feedback` schema (payload in the same
+`families/` folder) and the bounds in `TRAINING_LIMITS` before it is stored. Stored
+events are untrusted training input: `received`, or `flagged` for a second copy of an
+earlier example of the run. Nothing sets `approved_for_training` automatically.
+Examples stay until an administrator removes them; deleting a note keeps them.
+The server command line is the only way out and the only removal:
+
+    annotations-api training export [--include-flagged] > examples.jsonl
+    annotations-api training remove --run <run_id> | --note <note_id> | --account <account_id>
+
 ## Setup and operations
 
 1. Create the dedicated PostgreSQL database `asodya_annotations` and a least-privilege
