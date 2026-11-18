@@ -10,11 +10,12 @@ pub mod rooms;
 pub mod training;
 pub mod transcriptions;
 pub mod transfers;
+pub mod waitlist;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012, 013, 018 and 019 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 23] = [
+pub const SQLITE_MIGRATIONS: [&str; 24] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -38,6 +39,7 @@ pub const SQLITE_MIGRATIONS: [&str; 23] = [
     include_str!("../../migrations/021_v2_content_jobs.sql"),
     include_str!("../../migrations/022_v2_task_containers.sql"),
     include_str!("../../tests/sqlite/023_v2_task_container_identifier.sql"),
+    include_str!("../../migrations/024_drop_local_waitlist.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -52,6 +54,8 @@ pub struct Store {
     pub cortex: Arc<dyn cortex::CortexClient>,
     /// Optional Plane Slim client for task cards. Disabled when PLANE_URL is empty.
     pub plane: Arc<dyn plane::PlaneClient>,
+    /// Central gateway waitlist client. Disabled when GATEWAY_URL is empty.
+    pub waitlist: Arc<dyn waitlist::WaitlistClient>,
     /// Cloud transcription execution. No server runtime exists yet.
     pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
@@ -91,6 +95,7 @@ impl Store {
                 settings.plane_workspace,
                 http.clone(),
             ),
+            waitlist: waitlist::HttpWaitlist::from_settings(&settings.gateway_url),
             execution: execution::none(),
             http,
         })
@@ -119,6 +124,7 @@ impl Store {
             training_limits: training::FeedbackLimiter::fixture(),
             cortex: Arc::new(cortex::DisabledCortex),
             plane: Arc::new(plane::DisabledPlane),
+            waitlist: Arc::new(waitlist::DisabledWaitlist),
             execution: execution::none(),
             http: reqwest::Client::new(),
         }

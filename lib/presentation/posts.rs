@@ -120,9 +120,11 @@ pub async fn link_preview(
 
 pub async fn waitlist(
     State(app): State<App>,
+    headers: axum::http::HeaderMap,
     Json(input): Json<crate::domain::waitlist::Request>,
 ) -> Result<Json<Value>> {
+    let forwarded_for = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     Ok(Json(
-        crate::domain::waitlist::register(&app.store, input).await?,
+        crate::domain::waitlist::register(&app.store, input, forwarded_for).await?,
     ))
 }
