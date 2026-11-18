@@ -8,13 +8,16 @@ use crate::domain::{
 };
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, FromRequestParts, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
+use flate2::read::GzDecoder;
 use serde_json::Value;
+use std::io::Read;
 
 /// The gateway header with the signed-in account id.
 pub const IDENTITY_HEADER: &str = "x-uuid";
@@ -33,6 +36,47 @@ pub fn routes() -> Router<App> {
             get(publication_detail).put(publish).delete(unpublish),
         )
         .layer(DefaultBodyLimit::max(notes::MAX_BODY_BYTES + 1))
+        .layer(middleware::from_fn(gunzip))
+}
+
+/// A sync request may come gzip encoded (`Content-Encoding: gzip`,
+/// annotations#19): the body is decompressed once, with the same size limit
+/// as a plain body, before the routes read it.
+pub(crate) async fn gunzip(request: Request, next: Next) -> Response {
+    let gzip = request
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"gzip"));
+    if !gzip {
+        return next.run(request).await;
+    }
+    let too_large = || {
+        NoteError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_too_large",
+            "The request body is larger than allowed",
+        )
+        .into_response()
+    };
+    let (mut parts, body) = request.into_parts();
+    let Ok(compressed) = axum::body::to_bytes(body, notes::MAX_BODY_BYTES + 1).await else {
+        return too_large();
+    };
+    let mut plain = Vec::new();
+    let read = GzDecoder::new(&compressed[..])
+        .take(notes::MAX_BODY_BYTES as u64 + 1)
+        .read_to_end(&mut plain);
+    if read.is_err() {
+        return NoteError::invalid("invalid_encoding", "The gzip request body cannot be read")
+            .into_response();
+    }
+    if plain.len() > notes::MAX_BODY_BYTES {
+        return too_large();
+    }
+    parts.headers.remove(header::CONTENT_ENCODING);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    next.run(Request::from_parts(parts, Body::from(plain)))
+        .await
 }
 
 impl IntoResponse for NoteError {

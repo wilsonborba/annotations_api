@@ -1017,17 +1017,6 @@ impl<'a> Obj<'a> {
             .ok_or_else(|| DocumentError::new("invalid_type", self.at(key)))
     }
     /// An array of integers. A float or another type is `invalid_type` at its index.
-    fn ints(&self, key: &str) -> R<Vec<i64>> {
-        self.arr(key)?
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                v.as_i64().ok_or_else(|| {
-                    DocumentError::new("invalid_type", format!("{}[{i}]", self.at(key)))
-                })
-            })
-            .collect()
-    }
     fn range(&self, key: &str, min: f64, max: f64) -> R<f64> {
         let n = self.num(key)?;
         if n < min || n > max {

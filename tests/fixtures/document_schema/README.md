@@ -26,7 +26,7 @@ One JSON object per file:
 | `document_text` | Used instead of `document` when strict JSON cannot hold the case (for example `1e999`). Parse this text first. |
 | `expect` | `{"valid": true}` or `{"valid": false, "code": "<code>", "path": "<path>"}`. |
 
-`path` names the first failing location, for example `items[3].samples[0].x`.
+`path` names the first failing location, for example `items[3].samples.data`.
 An empty path means the whole document. Checks run in document order, so the first
 error is stable.
 
@@ -36,12 +36,24 @@ Positions and sizes use logical page units (1 unit is 1 logical pixel at zoom 1.
 `page.width` comes from the document. Angles are radians. Colors are `#RRGGBBAA`.
 `captured_at` is Unix seconds.
 
-Stroke samples are stored column by column inside each stroke, as integer arrays
-of the same length:
+Stroke samples are compact columns (annotations#19): a sample count and the columns as
+base64url (no padding) bytes:
 
 ```json
-"samples": {"x": [10000, 10400], "y": [30000, 30300], "t": [0, 8], "pressure": [500, 520], "tilt": [600, 610]}
+"samples": {"count": 2, "data": "AQOgnAGgBuDUA9gEABDoByiwCRQ"}
 ```
+
+The example holds x 10000, 10400; y 30000, 30300; t 0, 8; pressure 500, 520; tilt
+600, 610. The bytes are:
+
+1. byte 0: format version, 1;
+2. byte 1: flags, bit 0 when a pressure column follows, bit 1 for tilt;
+3. the columns x, y, t, then pressure and tilt when flagged, `count` values each. Every
+   value is the zigzag-encoded difference to the value before it in its column (the
+   first one to 0), written as an unsigned LEB128 varint. Nothing follows the last
+   column. Test vector: x 1, 0; y -1, 63; t 0, 8 gives `AQACAQGAAQAQ`.
+
+The units:
 
 - `x`, `y`: 1/100 of a page unit (10000 is 100.0 units). Inside the page width (or the
   typed handwriting box), `y` at or above 0.
@@ -49,13 +61,17 @@ of the same length:
 - `pressure`: optional column, 0 to 1000. `tilt`: optional column, 0 to 1571
   milliradians (pi/2). A missing column means the device gave no value.
 
+Data that cannot be read (not base64url, another version, unknown flags, too short or
+too long for `count`) is `invalid_samples` at `samples.data`; the range and order checks
+of the values also name `samples.data`.
+
 Editable nodes (`x`, `y`) and their `in` and `out` handles of strokes and shape paths
 also use integer 1/100 page units. Other shapes and blocks use page units.
 
 ## Error codes
 
 `invalid_json`, `non_finite_number`, `document_too_large`, `too_many_items`,
-`too_many_samples`, `too_many_nodes`, `schema_not_published`,
+`too_many_samples`, `invalid_samples`, `too_many_nodes`, `schema_not_published`,
 `unsupported_schema_version`, `invalid_type`, `missing_field`, `unknown_field`,
 `unknown_kind`, `kind_not_allowed`, `invalid_variant`, `invalid_id`,
 `invalid_reference`, `duplicate_id`, `out_of_bounds`, `out_of_range`, `invalid_size`,
