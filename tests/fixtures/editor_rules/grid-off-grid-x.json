@@ -1,0 +1,36 @@
+{
+  "description": "A text block whose x is not a whole cell is rejected",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 4,
+        "y": 0,
+        "width": 160,
+        "height": 80,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "t1"
+    ]
+  }
+}

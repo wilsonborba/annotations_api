@@ -1,0 +1,32 @@
+{
+  "description": "A link card whose width is not a whole number of cells is rejected",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "l1",
+        "kind": "link_card",
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 80,
+        "url": "https://example.com/a"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "l1"
+    ]
+  }
+}

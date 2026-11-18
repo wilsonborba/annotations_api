@@ -1,0 +1,43 @@
+{
+  "description": "A block may start at the next cell below a measured height",
+  "rule_id": "block_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 81,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 0,
+        "y": 88,
+        "width": 160,
+        "height": 80,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "valid"
+}

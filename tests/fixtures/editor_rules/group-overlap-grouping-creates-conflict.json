@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -16,8 +16,8 @@
         "kind": "text",
         "x": 0,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -34,12 +34,12 @@
         "opacity": 1,
         "samples": {
           "x": [
-            15000,
-            35000
+            12000,
+            28000
           ],
           "y": [
-            5000,
-            5000
+            4000,
+            4000
           ],
           "t": [
             0,
@@ -48,15 +48,15 @@
         },
         "nodes": [
           {
-            "x": 15000,
-            "y": 5000,
+            "x": 12000,
+            "y": 4000,
             "mode": "smooth",
             "corner": false,
             "sample": 0
           },
           {
-            "x": 35000,
-            "y": 5000,
+            "x": 28000,
+            "y": 4000,
             "mode": "smooth",
             "corner": false,
             "sample": 1
@@ -66,10 +66,10 @@
       {
         "id": "t2",
         "kind": "text",
-        "x": 300,
+        "x": 240,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t2"

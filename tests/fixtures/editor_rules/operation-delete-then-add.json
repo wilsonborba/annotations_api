@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -16,8 +16,8 @@
         "kind": "text",
         "x": 0,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -27,10 +27,10 @@
       {
         "id": "t2",
         "kind": "text",
-        "x": 200,
+        "x": 160,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t2"
@@ -51,10 +51,10 @@
         "item": {
           "id": "i1",
           "kind": "image",
-          "x": 150,
+          "x": 120,
           "y": 0,
-          "width": 200,
-          "height": 100,
+          "width": 160,
+          "height": 80,
           "file_id": "file-image-1"
         }
       },
@@ -62,7 +62,7 @@
         "op": "update",
         "id": "t1",
         "changes": {
-          "width": 150
+          "width": 120
         }
       }
     ]

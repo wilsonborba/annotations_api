@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -14,10 +14,10 @@
       {
         "id": "t1",
         "kind": "text",
-        "x": 40,
-        "y": 40,
-        "width": 200,
-        "height": 100,
+        "x": 32,
+        "y": 32,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -31,10 +31,10 @@
     "item": {
       "id": "i1",
       "kind": "image",
-      "x": 240,
-      "y": 40,
-      "width": 120,
-      "height": 100,
+      "x": 192,
+      "y": 32,
+      "width": 96,
+      "height": 80,
       "file_id": "file-image-1"
     }
   },

@@ -1,0 +1,36 @@
+{
+  "description": "Instant rooms use the same grid",
+  "rule_id": "grid",
+  "family": "instant-room",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 2,
+        "width": 160,
+        "height": 80,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "t1"
+    ]
+  }
+}

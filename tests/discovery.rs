@@ -95,7 +95,7 @@ async fn get(router: &Router, uri: &str) -> Reply {
 fn original(text: &str) -> Value {
     json!({
         "page": {"width": 1000, "background": {"kind": "blank"}},
-        "items": [{"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 300, "height": 120,
+        "items": [{"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 304, "height": 120,
                    "spans": [{"text": text}]}]
     })
 }

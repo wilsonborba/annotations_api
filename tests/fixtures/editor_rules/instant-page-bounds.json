@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 600,
+      "width": 480,
       "background": {
         "kind": "blank"
       }
@@ -16,8 +16,8 @@
         "kind": "image",
         "x": 0,
         "y": 0,
-        "width": 601,
-        "height": 100,
+        "width": 488,
+        "height": 80,
         "file_id": "file-image-1"
       }
     ]

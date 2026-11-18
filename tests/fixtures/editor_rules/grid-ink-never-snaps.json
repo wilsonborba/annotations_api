@@ -1,0 +1,97 @@
+{
+  "description": "Free strokes and shapes keep any position and size",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 80,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            1234,
+            5677,
+            9101
+          ],
+          "y": [
+            333,
+            4567,
+            8911
+          ],
+          "t": [
+            0,
+            8,
+            16
+          ]
+        },
+        "nodes": [
+          {
+            "x": 1234,
+            "y": 333,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 9101,
+            "y": 8911,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 2
+          }
+        ]
+      },
+      {
+        "id": "h1",
+        "kind": "shape",
+        "shape": "rectangle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "x": 13.25,
+        "y": 7.5,
+        "width": 41.3,
+        "height": 19.9
+      },
+      {
+        "id": "h2",
+        "kind": "shape",
+        "shape": "circle",
+        "color": "#1E40AFFF",
+        "line_width": 2,
+        "opacity": 1,
+        "center": {
+          "x": 301.7,
+          "y": 99.1
+        },
+        "radius": 23.3
+      }
+    ]
+  },
+  "expected": "valid"
+}

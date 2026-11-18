@@ -89,7 +89,7 @@ fn original(x: i64) -> Value {
     json!({
         "page": {"width": 1000, "background": {"kind": "blank"}},
         "items": [
-            {"id": "t1", "kind": "text", "x": x, "y": 40, "width": 300, "height": 120,
+            {"id": "t1", "kind": "text", "x": x, "y": 40, "width": 304, "height": 120,
              "spans": [{"text": "Photosynthesis"}]}
         ]
     })
@@ -246,8 +246,8 @@ async fn two_devices_patch_with_the_same_revision_one_wins_one_gets_409() {
     let (store, router) = setup().await;
     let note_id = create_original(&router, A, "n1", original(40)).await;
     let uri = format!("/me/notes/{note_id}");
-    let device_one = json!({"original": {"op": "update", "id": "t1", "changes": {"x": 100}}});
-    let device_two = json!({"original": {"op": "update", "id": "t1", "changes": {"x": 500}}});
+    let device_one = json!({"original": {"op": "update", "id": "t1", "changes": {"x": 104}}});
+    let device_two = json!({"original": {"op": "update", "id": "t1", "changes": {"x": 496}}});
     let one = call(
         &router,
         "PATCH",
@@ -276,7 +276,7 @@ async fn two_devices_patch_with_the_same_revision_one_wins_one_gets_409() {
     assert_eq!(note.body["revision"], 2);
     assert_eq!(
         note.body["representations"][0]["document"]["items"][0]["x"],
-        100
+        104
     );
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM note_revisions").await,
@@ -838,8 +838,8 @@ async fn put_and_patch_use_validated_content_and_replay_by_idempotency_key() {
         Some(A),
         &[("if-match", "2")],
         Some(
-            json!({"original": {"op": "add", "item": {"id": "t2", "kind": "text", "x": 50, "y": 50,
-            "width": 100, "height": 100, "spans": [{"text": "x"}]}}}),
+            json!({"original": {"op": "add", "item": {"id": "t2", "kind": "text", "x": 48, "y": 48,
+            "width": 96, "height": 100, "spans": [{"text": "x"}]}}}),
         ),
     )
     .await;

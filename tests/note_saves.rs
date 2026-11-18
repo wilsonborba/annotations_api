@@ -47,7 +47,7 @@ fn original(x: i64) -> Value {
     json!({
         "page": {"width": 1000, "background": {"kind": "blank"}},
         "items": [
-            {"id": "t1", "kind": "text", "x": x, "y": 40, "width": 300, "height": 120,
+            {"id": "t1", "kind": "text", "x": x, "y": 40, "width": 304, "height": 120,
              "spans": [{"text": "Photosynthesis"}]},
             {"id": "i1", "kind": "image", "x": 400, "y": 400, "width": 200, "height": 100,
              "file_id": "img-1"}
@@ -180,7 +180,7 @@ async fn crash_after_document_write_leaves_no_visible_change_and_task_removes_or
     let store = store().await;
     let note = saved_note(&store).await;
     let before = visible(&store, &note.note_id).await;
-    let request = update("op-crash-b", &note.note_id, 1, original(60));
+    let request = update("op-crash-b", &note.note_id, 1, original(64));
     let pending = begin(&store, &request).await;
     pending.write_documents(&store).await.unwrap();
     // The process stops here: steps (c) to (e) never run.
@@ -226,7 +226,7 @@ async fn crash_after_document_write_leaves_no_visible_change_and_task_removes_or
 async fn crash_after_commit_is_reconciled_without_duplicate_revisions() {
     let store = store().await;
     let note = saved_note(&store).await;
-    let request = update("op-crash-d", &note.note_id, 1, original(60));
+    let request = update("op-crash-d", &note.note_id, 1, original(64));
     let pending = begin(&store, &request).await;
     pending.write_documents(&store).await.unwrap();
     pending.confirm_files(&store).await.unwrap();
@@ -272,8 +272,8 @@ async fn concurrent_saves_with_the_same_if_match_one_wins_the_other_gets_409() {
     let store = store().await;
     let note = saved_note(&store).await;
     // Both pass step (a) before either commits.
-    let first = begin(&store, &update("op-a", &note.note_id, 1, original(60))).await;
-    let second = begin(&store, &update("op-b", &note.note_id, 1, original(70))).await;
+    let first = begin(&store, &update("op-a", &note.note_id, 1, original(64))).await;
+    let second = begin(&store, &update("op-b", &note.note_id, 1, original(72))).await;
     for p in [&first, &second] {
         p.write_documents(&store).await.unwrap();
         p.confirm_files(&store).await.unwrap();
@@ -300,8 +300,8 @@ async fn concurrent_saves_with_the_same_if_match_one_wins_the_other_gets_409() {
     assert_eq!(current, won.revisions[0].revision_id);
 
     // The same race through the whole pipeline at the same time.
-    let a = update("op-c", &note.note_id, 2, original(90));
-    let b = update("op-d", &note.note_id, 2, original(100));
+    let a = update("op-c", &note.note_id, 2, original(88));
+    let b = update("op-d", &note.note_id, 2, original(104));
     let (ra, rb) = tokio::join!(note_saves::save(&store, &a), note_saves::save(&store, &b));
     let results = [ra, rb];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
@@ -343,15 +343,15 @@ async fn retry_with_the_same_operation_id_gives_the_same_response() {
 
     // The same id with a different payload is rejected.
     let mut changed = request.clone();
-    changed.representations[0].content = Content::Document(original(41));
+    changed.representations[0].content = Content::Document(original(48));
     let error = note_saves::save(&store, &changed).await.unwrap_err();
     assert!(matches!(error, SaveError::OperationReused));
     assert_eq!(Error::from(error).0, StatusCode::UNPROCESSABLE_ENTITY);
 
     // An update replays its first result too, also after the note moved on.
-    let next = update("op-2", &first.note_id, 1, original(60));
+    let next = update("op-2", &first.note_id, 1, original(64));
     let saved = note_saves::save(&store, &next).await.unwrap();
-    note_saves::save(&store, &update("op-3", &first.note_id, 2, original(70)))
+    note_saves::save(&store, &update("op-3", &first.note_id, 2, original(72)))
         .await
         .unwrap();
     assert_eq!(note_saves::save(&store, &next).await.unwrap(), saved);
@@ -369,7 +369,7 @@ async fn retry_with_the_same_operation_id_gives_the_same_response() {
     }
 
     // Operation ids belong to their owner: another owner cannot replay them.
-    let mut other = update("op-2", &first.note_id, 1, original(60));
+    let mut other = update("op-2", &first.note_id, 1, original(64));
     other.owner_id = "u2".into();
     assert!(matches!(
         note_saves::save(&store, &other).await,
@@ -389,7 +389,7 @@ async fn failure_before_commit_removes_the_documents_and_cleanup_retries_are_bou
     let before = visible(&store, &note.note_id).await;
 
     // Step (c) fails: the file stopped being ready after validation.
-    let request = update("op-file", &note.note_id, 1, original(60));
+    let request = update("op-file", &note.note_id, 1, original(64));
     let pending = begin(&store, &request).await;
     pending.write_documents(&store).await.unwrap();
     sqlx::query("UPDATE files SET status='failed' WHERE file_id='img-1'")
@@ -410,7 +410,7 @@ async fn failure_before_commit_removes_the_documents_and_cleanup_retries_are_bou
     // Step (b) fails: CouchDB is down, also for the cleanup.
     let mut down = store.clone();
     down.docs = couch_down();
-    let request = update("op-couch", &note.note_id, 1, original(70));
+    let request = update("op-couch", &note.note_id, 1, original(72));
     let error = note_saves::save(&down, &request).await.unwrap_err();
     assert!(matches!(error, SaveError::Unavailable));
     assert_eq!(visible(&store, &note.note_id).await, before);
@@ -471,7 +471,7 @@ async fn published_and_current_revisions_are_kept_and_old_ones_are_pruned() {
         };
         m.lock().unwrap()[&published_doc].clone()
     };
-    let second = note_saves::save(&store, &update("op-2", &note.note_id, 1, original(60)))
+    let second = note_saves::save(&store, &update("op-2", &note.note_id, 1, original(64)))
         .await
         .unwrap();
     let third = note_saves::save(&store, &update("op-3", &note.note_id, 2, original(80)))
@@ -526,7 +526,7 @@ async fn operations_apply_to_the_current_revision_and_inputs_are_checked() {
     // PATCH style: an editor operation on the current revision.
     let mut patch = update("op-move", &note.note_id, 1, Value::Null);
     patch.representations[0].content =
-        Content::Operation(json!({"op": "update", "id": "t1", "changes": {"x": 500, "y": 600}}));
+        Content::Operation(json!({"op": "update", "id": "t1", "changes": {"x": 496, "y": 600}}));
     let moved = note_saves::save(&store, &patch).await.unwrap();
     assert_eq!(moved.revision, 2);
     let doc_id: String = sqlx::query("SELECT document_id FROM note_revisions WHERE revision_id=$1")
@@ -541,12 +541,12 @@ async fn operations_apply_to_the_current_revision_and_inputs_are_checked() {
     let stored = m.lock().unwrap()[&doc_id].clone();
     assert_eq!(stored["type"], "note_revision");
     assert_eq!(stored["schema_name"], "note-original");
-    assert_eq!(stored["body"]["items"][0]["x"], 500);
+    assert_eq!(stored["body"]["items"][0]["x"], 496);
 
     // An overlap is rejected by the editor rules before any write.
     let mut overlap = update("op-overlap", &note.note_id, 2, Value::Null);
     overlap.representations[0].content =
-        Content::Operation(json!({"op": "update", "id": "t1", "changes": {"x": 350, "y": 380}}));
+        Content::Operation(json!({"op": "update", "id": "t1", "changes": {"x": 352, "y": 376}}));
     let documents = document_count(&store);
     let error = Error::from(note_saves::save(&store, &overlap).await.unwrap_err());
     assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
@@ -620,7 +620,7 @@ async fn operations_apply_to_the_current_revision_and_inputs_are_checked() {
 async fn restarted_attempt_uses_new_document_ids_and_fences_old_pending_handles() {
     let store = store().await;
     let note = saved_note(&store).await;
-    let request = update("restart", &note.note_id, 1, original(60));
+    let request = update("restart", &note.note_id, 1, original(64));
     let old = begin(&store, &request).await;
     old.write_documents(&store).await.unwrap();
     old.abandon(&store).await.unwrap();
@@ -652,7 +652,7 @@ async fn restarted_attempt_uses_new_document_ids_and_fences_old_pending_handles(
 async fn pruning_commits_sql_before_document_deletion_and_cleanup_survives_failure() {
     let store = store().await;
     let note = saved_note(&store).await;
-    note_saves::save(&store, &update("new", &note.note_id, 1, original(60)))
+    note_saves::save(&store, &update("new", &note.note_id, 1, original(64)))
         .await
         .unwrap();
     let mut down = store.clone();
@@ -788,7 +788,7 @@ async fn reconciler_waits_for_document_writer_and_blocks_its_later_commit() {
     let mut settings = *settings;
     settings.couch_url = format!("http://{address}");
     store.docs = Documents::remote(settings, http);
-    let pending = begin(&store, &update("writer", &note.note_id, 1, original(60))).await;
+    let pending = begin(&store, &update("writer", &note.note_id, 1, original(64))).await;
     let writer_store = store.clone();
     let writer = tokio::spawn(async move {
         pending.write_documents(&writer_store).await.unwrap();

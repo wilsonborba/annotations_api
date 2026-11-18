@@ -1,0 +1,34 @@
+{
+  "description": "A Reports block sets its own display area, so the height must be whole cells",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "r1",
+        "kind": "reports_embed",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 60,
+        "report_id": "report-1",
+        "mode": "live",
+        "source": "link"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "r1"
+    ]
+  }
+}

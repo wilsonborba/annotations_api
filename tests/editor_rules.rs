@@ -164,6 +164,9 @@ fn fixtures_cover_every_rule_kind_and_operation() {
         "code:missing_item",
         "code:invalid_operation",
         "code:immutable_field",
+        "grid:valid",
+        "grid:invalid",
+        "code:off_grid",
     ] {
         if !seen.contains(need) {
             missing.push(need.to_string());
@@ -191,6 +194,13 @@ fn fixtures_cover_every_rule_kind_and_operation() {
         "block-overlap-op-add",
         "ink-only-group-over-block",
         "group-overlap-mixed-shape-member",
+        "grid-area-height",
+        "grid-measured-height-free",
+        "grid-ink-never-snaps",
+        "grid-group-member-off-grid",
+        "grid-occupied-cells-group",
+        "grid-occupied-cells-touching",
+        "grid-instant-off-grid",
     ] {
         if !all.iter().any(|(f, _)| f == &format!("{name}.json")) {
             missing.push(name.to_string());
@@ -201,9 +211,9 @@ fn fixtures_cover_every_rule_kind_and_operation() {
 
 #[test]
 fn errors_name_the_rule_and_the_items() {
-    let doc = json!({"page":{"width":500,"background":{"kind":"blank"}},"items":[
-        {"id":"t1","kind":"text","x":0,"y":0,"width":100,"height":100,"spans":[]}]});
-    let op = json!({"op":"add","item":{"id":"t2","kind":"text","x":50,"y":50,"width":100,"height":100,"spans":[]}});
+    let doc = json!({"page":{"width":496,"background":{"kind":"blank"}},"items":[
+        {"id":"t1","kind":"text","x":0,"y":0,"width":96,"height":96,"spans":[]}]});
+    let op = json!({"op":"add","item":{"id":"t2","kind":"text","x":48,"y":48,"width":96,"height":96,"spans":[]}});
     let e =
         editor_rules::check_edit(Family::Original, 1, &doc, Some(&op), &NOTE_LIMITS).unwrap_err();
     let core: annotations_api::core::Error = e.into();
@@ -214,7 +224,7 @@ fn errors_name_the_rule_and_the_items() {
     );
     // The stored document is unchanged and an accepted edit returns the working copy.
     assert_eq!(doc["items"].as_array().unwrap().len(), 1);
-    let ok = json!({"op":"add","item":{"id":"t2","kind":"text","x":100,"y":0,"width":100,"height":100,"spans":[]}});
+    let ok = json!({"op":"add","item":{"id":"t2","kind":"text","x":96,"y":0,"width":96,"height":96,"spans":[]}});
     let edited =
         editor_rules::check_edit(Family::Original, 1, &doc, Some(&ok), &NOTE_LIMITS).unwrap();
     assert_eq!(edited.document["items"][1]["id"], "t2");
@@ -222,7 +232,7 @@ fn errors_name_the_rule_and_the_items() {
         Family::Original,
         1,
         &doc,
-        Some(&json!({"op":"update","id":"t1","changes":{"x":450}})),
+        Some(&json!({"op":"update","id":"t1","changes":{"x":408}})),
         &NOTE_LIMITS,
     )
     .unwrap_err();
@@ -230,6 +240,19 @@ fn errors_name_the_rule_and_the_items() {
     assert_eq!(
         core.1,
         "out_of_bounds: The position is outside the page (rule page_bounds; items t1) at items[0].x"
+    );
+    let e = editor_rules::check_edit(
+        Family::Original,
+        1,
+        &doc,
+        Some(&json!({"op":"update","id":"t1","changes":{"y":3}})),
+        &NOTE_LIMITS,
+    )
+    .unwrap_err();
+    let core: annotations_api::core::Error = e.into();
+    assert_eq!(
+        core.1,
+        "off_grid: Structured blocks must sit on whole cells of the placement grid (rule grid; items t1) at items[0].y"
     );
 }
 
@@ -239,7 +262,7 @@ fn a_document_at_the_item_limit_is_checked() {
     let n = NOTE_LIMITS.max_items;
     let items: Vec<Value> = (0..n)
         .map(|i| {
-            json!({"id":format!("t{i}"),"kind":"text","x":(i % 10) as f64 * 100.0,"y":(i / 10) as f64 * 40.0,"width":100,"height":40,"spans":[]})
+            json!({"id":format!("t{i}"),"kind":"text","x":(i % 10) as f64 * 96.0,"y":(i / 10) as f64 * 40.0,"width":96,"height":40,"spans":[]})
         })
         .collect();
     let doc = json!({"page":{"width":1000,"background":{"kind":"blank"}},"items":items});

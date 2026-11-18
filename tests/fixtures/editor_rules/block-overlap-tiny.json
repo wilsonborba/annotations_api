@@ -1,11 +1,11 @@
 {
-  "description": "Two blocks overlap by half a unit",
+  "description": "Two blocks overlap by half a unit: a measured text height reaches into the block below",
   "rule_id": "block_overlap",
   "family": "note-original",
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -16,8 +16,8 @@
         "kind": "text",
         "x": 0,
         "y": 0,
-        "width": 100,
-        "height": 100,
+        "width": 80,
+        "height": 80.5,
         "spans": [
           {
             "text": "Block t1"
@@ -27,10 +27,10 @@
       {
         "id": "t2",
         "kind": "text",
-        "x": 99.5,
-        "y": 0,
-        "width": 100,
-        "height": 100,
+        "x": 0,
+        "y": 80,
+        "width": 80,
+        "height": 80,
         "spans": [
           {
             "text": "Block t2"

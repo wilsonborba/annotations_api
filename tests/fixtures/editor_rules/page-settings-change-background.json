@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -14,10 +14,10 @@
       {
         "id": "t1",
         "kind": "text",
-        "x": 600,
+        "x": 480,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -29,7 +29,7 @@
   "operation": {
     "op": "page",
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "ruled",
         "spacing": 32,

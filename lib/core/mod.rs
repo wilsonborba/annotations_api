@@ -47,6 +47,9 @@ pub const NOTE_LIMITS: NoteLimits = NoteLimits {
     max_nodes_per_stroke: 1_000,
     max_document_bytes: 7_500_000,
 };
+/// The invisible placement grid of the editor (B2.1): one cell in page units.
+/// Structured blocks sit on whole cells; ink and shape points never snap.
+pub const GRID_CELL: f64 = 8.0;
 /// Retry and cleanup bounds of the note save pipeline and its reconciliation task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SaveSettings {
