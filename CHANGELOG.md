@@ -2,8 +2,6 @@
 
 ### 🚀 Features
 
-- *(models)* Register immutable releases with server commands, atomic default rollback and signed-in sanitized manifests (#31)
-
 - *(logs)* Add journald logger and trusted LAN stream
 - *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
 - *(schemas)* Add note document v2 families and nested item validation (#19)
@@ -20,6 +18,7 @@
 - *(admin)* Add administrative note, project and file operations with the central access level (#26)
 - *(instant)* Validate v2 room documents with atomic edits, item revisions and fixed expiry (#29)
 - *(instant)* Reserve temporary file metadata, verify binary uploads and preserve expiry quotas (#30)
+- *(models)* Register model releases with server CLI commands, keep one default with rollback and serve signed-in manifests without private fields (#31)
 
 ### 🐛 Bug Fixes
 

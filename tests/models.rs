@@ -94,14 +94,17 @@ async fn cli_register_activate_rollback_and_immutable_history() {
         cli::run(&store.db, Command::Rollback).await.unwrap(),
         "fixture-v1"
     );
-    assert_eq!(
-        pointer(&store).await,
-        (Some("fixture-v1".into()), Some("v2".into()))
-    );
+    assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
     assert_eq!(
         models::detail(&store.db, "v2").await.unwrap().status,
         "retired"
     );
+    // A second rollback never restores the release that was just rolled back.
+    assert_eq!(
+        models::rollback(&store.db).await.unwrap_err().code,
+        "model_rollback_unavailable"
+    );
+    assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
     assert_eq!(
         models::register(&store.db, fixture("v2"))
             .await
@@ -120,9 +123,12 @@ async fn cli_register_activate_rollback_and_immutable_history() {
         "a".repeat(64)
     );
     assert!(models::activate(&store.db, "missing").await.is_err());
+    assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
+    // An explicit activate of a retired release keeps the older release as the rollback target.
+    models::activate(&store.db, "v2").await.unwrap();
     assert_eq!(
         pointer(&store).await,
-        (Some("fixture-v1".into()), Some("v2".into()))
+        (Some("v2".into()), Some("fixture-v1".into()))
     );
     assert!(cli::parse(&["models".into(), "activate".into()]).is_err());
 }
@@ -154,15 +160,17 @@ async fn signed_in_whitelist_filters_and_no_http_promotion() {
         let (status, body) = request(&router, uri, Some("account-a")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(!body.to_string().contains("private-"));
+        assert!(!body.to_string().contains("metrics"));
         let manifest = if uri.contains('?') {
             &body["models"][0]
         } else {
             &body
         };
-        assert_eq!(manifest.as_object().unwrap().len(), 8);
+        assert_eq!(manifest.as_object().unwrap().len(), 7);
         assert_eq!(manifest["artifacts"][0].as_object().unwrap().len(), 3);
         assert_eq!(manifest["version"], "v1");
-        assert_eq!(manifest["metrics"]["th"]["cer"], 0.15);
+        assert_eq!(manifest["languages"], json!(["en", "pt-BR", "th"]));
+        assert_eq!(manifest["capabilities"], json!(["handwriting"]));
     }
     assert_eq!(
         request(&router, "/models/draft", Some("account-a")).await.0,
@@ -424,9 +432,17 @@ async fn postgres_registry_transaction_and_concurrency_proof() {
         1
     );
     assert_eq!(
-        models::detail(&db, "pg-v1").await.unwrap().metrics["th"]["cer"],
-        0.15
+        models::detail(&db, "pg-v1").await.unwrap().languages,
+        ["en", "pt-BR", "th"]
     );
+    let metric: f64 = sqlx::query(
+        "SELECT value FROM model_metrics WHERE version='pg-v1' AND language='th' AND name='cer'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap()
+    .get("value");
+    assert_eq!(metric, 0.15);
     for _ in 0..8 {
         let (a, b) = tokio::join!(
             models::activate(&db, "pg-v2"),

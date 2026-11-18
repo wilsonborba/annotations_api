@@ -5,7 +5,6 @@ use crate::domain::{
 };
 use axum::http::StatusCode;
 use sqlx::{Any, AnyPool, Row, Transaction, any::AnyRow};
-use std::collections::BTreeMap;
 
 pub async fn register(db: &AnyPool, m: &Manifest) -> Result<()> {
     let mut tx = db.begin().await?;
@@ -84,8 +83,8 @@ pub async fn exists(tx: &mut Transaction<'_, Any>, version: &str) -> Result<bool
 }
 pub async fn switch(
     tx: &mut Transaction<'_, Any>,
-    current: Option<&str>,
     target: &str,
+    previous: Option<&str>,
 ) -> Result<()> {
     sqlx::query("UPDATE model_releases SET status='retired' WHERE status='active'")
         .execute(&mut **tx)
@@ -96,7 +95,7 @@ pub async fn switch(
         .await?;
     sqlx::query("UPDATE model_default SET current_version=$1,previous_version=$2 WHERE id=1")
         .bind(target)
-        .bind(current)
+        .bind(previous)
         .execute(&mut **tx)
         .await?;
     Ok(())
@@ -135,19 +134,6 @@ async fn public(db: &AnyPool, row: AnyRow) -> Result<PublicManifest> {
     .into_iter()
     .map(|r| r.try_get("capability"))
     .collect::<std::result::Result<Vec<String>, _>>()?;
-    let mut metrics: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
-    for row in sqlx::query(
-        "SELECT language,name,value FROM model_metrics WHERE version=$1 ORDER BY language,name",
-    )
-    .bind(&version)
-    .fetch_all(db)
-    .await?
-    {
-        metrics
-            .entry(row.try_get("language")?)
-            .or_default()
-            .insert(row.try_get("name")?, row.try_get("value")?);
-    }
     let current: Option<String> = row.try_get("current_version")?;
     Ok(PublicManifest {
         is_default: current.as_deref() == Some(&version),
@@ -157,7 +143,6 @@ async fn public(db: &AnyPool, row: AnyRow) -> Result<PublicManifest> {
         artifacts,
         languages,
         capabilities,
-        metrics,
     })
 }
 pub async fn list(db: &AnyPool, platform: Option<&str>, language: Option<&str>) -> Result<Listing> {

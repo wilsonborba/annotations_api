@@ -1,4 +1,6 @@
-//! Owned release metadata and manual promotion. The public DTO is a strict whitelist.
+//! Owned release metadata and manual promotion. The public DTO is a strict whitelist:
+//! versions, checksums, sizes, languages and capabilities. Provenance, FSM references
+//! and evaluation metrics stay on the server.
 use crate::{dal::models as repository, domain::notes::NoteError};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -43,7 +45,6 @@ pub struct PublicManifest {
     pub artifacts: Vec<PublicArtifact>,
     pub languages: Vec<String>,
     pub capabilities: Vec<String>,
-    pub metrics: BTreeMap<String, BTreeMap<String, f64>>,
 }
 #[derive(Debug, Serialize)]
 pub struct Listing {
@@ -160,7 +161,10 @@ async fn promote(db: &AnyPool, requested: Option<&str>) -> Result<String> {
         ));
     }
     if current.as_deref() != Some(target) {
-        repository::switch(&mut tx, current.as_deref(), target).await?;
+        // Activate keeps the replaced release as the rollback target. Rollback clears it,
+        // so a second rollback never brings back the release that was just rolled back.
+        let previous = requested.and(current.as_deref());
+        repository::switch(&mut tx, target, previous).await?;
     }
     tx.commit().await?;
     Ok(target.to_owned())
