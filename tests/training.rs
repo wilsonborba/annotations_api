@@ -6,7 +6,7 @@ use annotations_api::{
     domain::{App, models, schemas},
     presentation::{
         self,
-        cli::{self, Command, Target},
+        cli::{self, Command, ReviewSelection, Target},
     },
 };
 use axum::{
@@ -189,11 +189,18 @@ fn documents(store: &Store) -> usize {
         _ => unreachable!(),
     }
 }
-async fn export(store: &Store, include_flagged: bool) -> Vec<Value> {
+async fn export(store: &Store, include_received: bool, include_flagged: bool) -> Vec<Value> {
     let mut out = Vec::new();
-    let summary = cli::training(store, Command::TrainingExport { include_flagged }, &mut out)
-        .await
-        .unwrap();
+    let summary = cli::training(
+        store,
+        Command::TrainingExport {
+            include_received,
+            include_flagged,
+        },
+        &mut out,
+    )
+    .await
+    .unwrap();
     let lines: Vec<Value> = String::from_utf8(out)
         .unwrap()
         .lines()
@@ -507,7 +514,8 @@ async fn many_events_per_run_keep_intermediate_and_accepted_distinct() {
     );
     // Nothing becomes approved for training by itself.
     assert!(stored.iter().all(|r| r.3 != "approved_for_training"));
-    let lines = export(&store, false).await;
+    assert!(export(&store, false, false).await.is_empty());
+    let lines = export(&store, true, false).await;
     let e4 = lines.iter().find(|l| l["event_id"] == "e4").unwrap();
     assert_eq!(
         e4["event"]["correction"],
@@ -534,7 +542,13 @@ async fn export_has_provenance_and_excludes_flagged_unless_asked() {
         .execute(&store.db)
         .await
         .unwrap();
-    let lines = export(&store, false).await;
+    // Default export returns only approved_for_training.
+    let approved = export(&store, false, false).await;
+    assert_eq!(approved.len(), 1);
+    assert_eq!(approved[0]["event_id"], "e1");
+    assert_eq!(approved[0]["status"], "approved_for_training");
+
+    let lines = export(&store, true, false).await;
     let mut ids: Vec<&str> = lines
         .iter()
         .map(|l| l["event_id"].as_str().unwrap())
@@ -559,7 +573,7 @@ async fn export_has_provenance_and_excludes_flagged_unless_asked() {
     assert_eq!(e2["event"]["strokes"][0]["pressure"][1], 600);
     let e1 = lines.iter().find(|l| l["event_id"] == "e1").unwrap();
     assert_eq!(e1["status"], "approved_for_training");
-    let all = export(&store, true).await;
+    let all = export(&store, true, true).await;
     assert_eq!(all.len(), 3);
     assert!(
         all.iter()
@@ -604,7 +618,7 @@ async fn note_deletion_keeps_examples_and_remove_by_note_deletes_them() {
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
     assert_eq!(rows(&store).await.len(), 2);
     assert_eq!(documents(&store), 2);
-    let lines = export(&store, false).await;
+    let lines = export(&store, true, false).await;
     let kept = lines
         .iter()
         .find(|l| l["provenance"]["run_id"] == run.as_str())
@@ -683,14 +697,56 @@ async fn remove_deletes_the_selected_examples_and_only_them() {
 fn training_commands_parse_strictly() {
     let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert!(matches!(
+        cli::parse(&args(&["training", "review"])).unwrap(),
+        Some(Command::TrainingReview { limit: None })
+    ));
+    assert!(matches!(
+        cli::parse(&args(&["training", "review", "--limit", "10"])).unwrap(),
+        Some(Command::TrainingReview { limit: Some(10) })
+    ));
+    assert!(matches!(
+        cli::parse(&args(&["training", "approve", "--run", "r1"])).unwrap(),
+        Some(Command::TrainingApprove(ReviewSelection::Run(id))) if id == "r1"
+    ));
+    assert!(matches!(
+        cli::parse(&args(&["training", "approve", "--event", "e1"])).unwrap(),
+        Some(Command::TrainingApprove(ReviewSelection::Event(id))) if id == "e1"
+    ));
+    assert!(matches!(
+        cli::parse(&args(&["training", "flag", "--run", "r1", "--event", "e1"])).unwrap(),
+        Some(Command::TrainingFlag(ReviewSelection::RunEvent(r, e))) if r == "r1" && e == "e1"
+    ));
+    assert!(matches!(
         cli::parse(&args(&["training", "export"])).unwrap(),
         Some(Command::TrainingExport {
+            include_received: false,
+            include_flagged: false
+        })
+    ));
+    assert!(matches!(
+        cli::parse(&args(&["training", "export", "--include-received"])).unwrap(),
+        Some(Command::TrainingExport {
+            include_received: true,
             include_flagged: false
         })
     ));
     assert!(matches!(
         cli::parse(&args(&["training", "export", "--include-flagged"])).unwrap(),
         Some(Command::TrainingExport {
+            include_received: false,
+            include_flagged: true
+        })
+    ));
+    assert!(matches!(
+        cli::parse(&args(&[
+            "training",
+            "export",
+            "--include-flagged",
+            "--include-received"
+        ]))
+        .unwrap(),
+        Some(Command::TrainingExport {
+            include_received: true,
             include_flagged: true
         })
     ));
@@ -711,7 +767,16 @@ fn training_commands_parse_strictly() {
         &["training", "remove"],
         &["training", "remove", "--run"],
         &["training", "remove", "--run", "r1", "--note", "n1"],
+        &["training", "approve"],
+        &["training", "flag"],
+        &["training", "review", "--limit", "abc"],
         &["training", "export", "--all"],
+        &[
+            "training",
+            "export",
+            "--include-flagged",
+            "--include-flagged",
+        ],
     ] {
         assert!(cli::parse(&args(bad)).is_err(), "{bad:?}");
     }
@@ -721,4 +786,154 @@ fn training_commands_parse_strictly() {
             .unwrap()
             .training()
     );
+}
+
+#[tokio::test]
+async fn review_approve_flag_and_default_approved_export() {
+    let (store, router) = setup().await;
+    let a_run = completed_run(&router, A, json!({"source_hash": "ha"})).await;
+    let b_run = completed_run(&router, B, json!({"source_hash": "hb"})).await;
+    feedback(
+        &router,
+        A,
+        &a_run,
+        vec![
+            event("a1", "intermediate", "one"),
+            event("a2", "accepted", "two"),
+        ],
+    )
+    .await;
+    // Duplicate content on same run becomes flagged.
+    feedback(&router, A, &a_run, vec![event("a3", "accepted", "two")]).await;
+    feedback(&router, B, &b_run, vec![event("b1", "accepted", "three")]).await;
+
+    // Default export is empty before review/approve.
+    assert!(export(&store, false, false).await.is_empty());
+
+    // Review returns flagged items and a balanced representative sample of received items.
+    let mut out = Vec::new();
+    let summary = cli::training(&store, Command::TrainingReview { limit: Some(2) }, &mut out)
+        .await
+        .unwrap();
+    assert_eq!(
+        summary,
+        "Reviewed training examples: 3 (flagged: 1, received: 2)"
+    );
+    let reviewed: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        reviewed
+            .iter()
+            .any(|l| l["event_id"] == "a3" && l["status"] == "flagged")
+    );
+    // The 2-item received sample takes one from A and one from B (round-robin per account).
+    let received_accounts: Vec<&str> = reviewed
+        .iter()
+        .filter(|l| l["status"] == "received")
+        .map(|l| l["provenance"]["account_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(received_accounts.len(), 2);
+    assert!(received_accounts.contains(&A) && received_accounts.contains(&B));
+
+    // Approve one event by example_id and one run by run_id.
+    let a_sample = reviewed
+        .iter()
+        .find(|l| l["status"] == "received" && l["provenance"]["account_id"] == A)
+        .unwrap();
+    let a_event_id = a_sample["event_id"].as_str().unwrap().to_string();
+    let a_example_id = a_sample["example_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        cli::training(
+            &store,
+            Command::TrainingApprove(ReviewSelection::Event(a_example_id.clone())),
+            &mut Vec::new()
+        )
+        .await
+        .unwrap(),
+        "Approved training examples: 1"
+    );
+    assert_eq!(
+        cli::training(
+            &store,
+            Command::TrainingApprove(ReviewSelection::Run(b_run.clone())),
+            &mut Vec::new()
+        )
+        .await
+        .unwrap(),
+        "Approved training examples: 1"
+    );
+    let exported = export(&store, false, false).await;
+    let mut ids: Vec<&str> = exported
+        .iter()
+        .map(|l| l["event_id"].as_str().unwrap())
+        .collect();
+    ids.sort();
+    let mut expected = vec![a_event_id.as_str(), "b1"];
+    expected.sort();
+    assert_eq!(ids, expected);
+
+    // Flag by event removes it from default export.
+    assert_eq!(
+        cli::training(
+            &store,
+            Command::TrainingFlag(ReviewSelection::Event(a_example_id)),
+            &mut Vec::new()
+        )
+        .await
+        .unwrap(),
+        "Flagged training examples: 1"
+    );
+    let exported = export(&store, false, false).await;
+    assert_eq!(exported.len(), 1);
+    assert_eq!(exported[0]["event_id"], "b1");
+}
+
+#[tokio::test]
+async fn per_account_rate_and_concurrency_limits() {
+    let (store, router) = setup().await;
+    let a_run = completed_run(&router, A, json!({"source_hash": "ha"})).await;
+    let b_run = completed_run(&router, B, json!({"source_hash": "hb"})).await;
+
+    // Concurrency limit: hold max_concurrent_per_account permits for A; next for A fails with 429.
+    let mut permits = Vec::new();
+    for _ in 0..TRAINING_LIMITS.max_concurrent_per_account {
+        permits.push(
+            store
+                .training_limits
+                .acquire(A, annotations_api::core::now())
+                .await
+                .unwrap(),
+        );
+    }
+    let blocked = feedback(&router, A, &a_run, vec![event("e1", "accepted", "hi")]).await;
+    assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(blocked.body["code"], "rate_limit_exceeded");
+    // Account B is unaffected.
+    let ok_b = feedback(&router, B, &b_run, vec![event("b1", "accepted", "hi")]).await;
+    assert_eq!(ok_b.status, StatusCode::CREATED);
+
+    for p in permits {
+        p.release().await;
+    }
+
+    // Rate limit: exhaust remaining requests in the window for A; next for A fails with 429.
+    let mut used = TRAINING_LIMITS.max_concurrent_per_account;
+    while used < TRAINING_LIMITS.max_requests_per_window {
+        let p = store
+            .training_limits
+            .acquire(A, annotations_api::core::now())
+            .await
+            .unwrap();
+        p.release().await;
+        used += 1;
+    }
+    let rate_limited = feedback(&router, A, &a_run, vec![event("e2", "accepted", "hi")]).await;
+    assert_eq!(rate_limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(rate_limited.body["code"], "rate_limit_exceeded");
+    // Account B is still unaffected.
+    let ok_b2 = feedback(&router, B, &b_run, vec![event("b2", "accepted", "ok")]).await;
+    assert_eq!(ok_b2.status, StatusCode::CREATED);
 }
