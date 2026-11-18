@@ -10,6 +10,7 @@ use crate::{
     domain::{
         files,
         notes::{NoteError, allow, parse_body},
+        schemas,
     },
 };
 use axum::http::StatusCode;
@@ -18,6 +19,12 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 type R<T> = std::result::Result<T, NoteError>;
+
+pub const DRAFT_SCHEMA: &str = "content-job-draft";
+
+pub fn supports(version: i64) -> bool {
+    version == 1
+}
 
 #[derive(Clone, Debug)]
 pub struct JobEvent {
@@ -47,6 +54,18 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<(Value, bool)> 
             "Optional Cortex processing is disabled",
         ));
     }
+    schemas::published_fields(store, DRAFT_SCHEMA, None)
+        .await
+        .map_err(|e| {
+            if e.0.is_server_error() {
+                NoteError::from(e)
+            } else {
+                NoteError::invalid(
+                    "schema_not_published",
+                    "A registered published content-job draft schema version is required",
+                )
+            }
+        })?;
     let body = parse_body(raw)?;
     allow(
         &body,
@@ -341,6 +360,11 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
 
     let mut cortex_file_ids = Vec::new();
     if !file_rows.is_empty() {
+        sqlx::query("UPDATE content_jobs SET status='uploading',updated_at=$1 WHERE job_id=$2 AND status='queued'")
+            .bind(core::now())
+            .bind(job_id)
+            .execute(&store.db)
+            .await?;
         append_event(store, job_id, "uploading").await?;
     }
     for frow in file_rows {
@@ -419,7 +443,7 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
         }
     };
     sqlx::query(
-        "UPDATE content_jobs SET status='running',cortex_session_id=$1,cortex_output_id=$2,updated_at=$3 WHERE job_id=$4 AND status='queued'",
+        "UPDATE content_jobs SET status='running',cortex_session_id=$1,cortex_output_id=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','uploading')",
     )
     .bind(&session_id)
     .bind(&output_id)
@@ -429,6 +453,18 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
     .await?;
     append_event(store, job_id, "running").await?;
 
+    poll_and_finish(store, owner, job_id, &session_id, &output_id).await
+}
+
+/// Poll an already-started Cortex output until terminal, save the draft to CouchDB
+/// against the published `content-job-draft` schema, and clean up the temporary chat.
+async fn poll_and_finish(
+    store: &Store,
+    owner: &str,
+    job_id: &str,
+    session_id: &str,
+    output_id: &str,
+) -> R<()> {
     let mut final_out = None;
     for _ in 0..120 {
         let cur: String = sqlx::query("SELECT status FROM content_jobs WHERE job_id=$1")
@@ -440,11 +476,7 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
             release_files(store, job_id).await?;
             return Ok(());
         }
-        match store
-            .cortex
-            .get_output(owner, &session_id, &output_id)
-            .await
-        {
+        match store.cortex.get_output(owner, session_id, output_id).await {
             Ok(out) if out.status != OutputStatus::Running => {
                 final_out = Some(out);
                 break;
@@ -473,12 +505,21 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
         OutputStatus::Running => ("failed", Some("cortex_timeout".into()), None),
     };
 
-    // Save the draft output durably BEFORE deleting the temporary Cortex chat.
+    // Validate and store the draft in CouchDB BEFORE deleting the temporary Cortex chat.
+    let (doc_id, schema_name, schema_version, draft_saved) = if !out.text.is_empty() {
+        let (doc_id, version) = save_draft(store, job_id, &out.text).await?;
+        (Some(doc_id), Some(DRAFT_SCHEMA), Some(version), 1_i64)
+    } else {
+        (None, None, None, 0_i64)
+    };
     sqlx::query(
-        "UPDATE content_jobs SET status=$1,draft_text=$2,draft_saved=1,error_code=$3,error_message=$4,updated_at=$5 WHERE job_id=$6 AND status IN ('queued','running')",
+        "UPDATE content_jobs SET status=$1,draft_document_id=$2,draft_schema_name=$3,draft_schema_version=$4,draft_saved=$5,error_code=$6,error_message=$7,updated_at=$8 WHERE job_id=$9 AND status IN ('queued','uploading','running')",
     )
     .bind(next_status)
-    .bind(&out.text)
+    .bind(&doc_id)
+    .bind(schema_name)
+    .bind(schema_version)
+    .bind(draft_saved)
     .bind(&err_code)
     .bind(&err_msg)
     .bind(core::now())
@@ -487,7 +528,7 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
     .await?;
     append_event(store, job_id, next_status).await?;
 
-    if store.cortex.delete_chat(owner, &session_id).await.is_ok() {
+    if store.cortex.delete_chat(owner, session_id).await.is_ok() {
         sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2")
             .bind(core::now())
             .bind(job_id)
@@ -498,9 +539,94 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
     Ok(())
 }
 
+async fn save_draft(store: &Store, job_id: &str, text: &str) -> R<(String, i64)> {
+    let (version, fields) = schemas::published_fields(store, DRAFT_SCHEMA, None)
+        .await
+        .map_err(|e| {
+            if e.0.is_server_error() {
+                NoteError::from(e)
+            } else {
+                NoteError::invalid(
+                    "schema_not_published",
+                    "A registered published content-job draft schema version is required",
+                )
+            }
+        })?;
+    let body = json!({
+        "format": "markdown",
+        "text": text,
+    });
+    if let Err((code, path)) = schemas::check_fields(&fields, &body) {
+        return Err(NoteError::invalid(
+            code,
+            format!("Draft does not match schema at {path}"),
+        ));
+    }
+    let document_id = format!("{DRAFT_SCHEMA}-{job_id}");
+    store
+        .docs
+        .put(
+            &document_id,
+            &json!({
+                "schema_name": DRAFT_SCHEMA,
+                "schema_version": version,
+                "body": body,
+            }),
+        )
+        .await
+        .map_err(NoteError::from)?;
+    Ok((document_id, version))
+}
+
+/// Resume or truthfully fail unfinished jobs left in `queued`, `uploading`, or `running`
+/// after a server restart. Never starts a second upload or Cortex execution.
+pub async fn resume_unfinished(store: &Store) -> R<usize> {
+    let rows = sqlx::query(
+        "SELECT job_id,owner_id,cortex_session_id,cortex_output_id FROM content_jobs WHERE status IN ('queued','uploading','running') ORDER BY created_at,job_id",
+    )
+    .fetch_all(&store.db)
+    .await?;
+    let mut handled = 0;
+    for row in rows {
+        let job_id: String = row.get("job_id");
+        let owner: String = row.get("owner_id");
+        let session_id: Option<String> = row.try_get("cortex_session_id")?;
+        let output_id: Option<String> = row.try_get("cortex_output_id")?;
+        match (session_id, output_id) {
+            (Some(sid), Some(oid)) => {
+                if store.cortex.is_configured() {
+                    let bg_store = store.clone();
+                    tokio::spawn(async move {
+                        let _ = poll_and_finish(&bg_store, &owner, &job_id, &sid, &oid).await;
+                    });
+                } else {
+                    fail_job(
+                        store,
+                        &job_id,
+                        "cortex_unavailable",
+                        "Optional Cortex processing is disabled after restart",
+                    )
+                    .await?;
+                }
+            }
+            _ => {
+                fail_job(
+                    store,
+                    &job_id,
+                    "server_restarted",
+                    "Job was interrupted before Cortex execution started",
+                )
+                .await?;
+            }
+        }
+        handled += 1;
+    }
+    Ok(handled)
+}
+
 async fn fail_job(store: &Store, job_id: &str, code: &str, message: &str) -> R<()> {
     sqlx::query(
-        "UPDATE content_jobs SET status='failed',error_code=$1,error_message=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','running')",
+        "UPDATE content_jobs SET status='failed',error_code=$1,error_message=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','uploading','running')",
     )
     .bind(code)
     .bind(message)
@@ -519,7 +645,7 @@ pub async fn get(store: &Store, owner: &str, job_id: &str) -> R<Value> {
         return Err(NoteError::not_found());
     }
     let row = sqlx::query(
-        "SELECT job_id,client_job_id,source_note_id,source_revision_id,kind,status,cortex_session_id,cortex_output_id,event_cursor,draft_text,draft_saved,cortex_cleaned,error_code,error_message,created_at,updated_at FROM content_jobs WHERE job_id=$1 AND owner_id=$2",
+        "SELECT job_id,client_job_id,source_note_id,source_revision_id,kind,status,cortex_session_id,cortex_output_id,event_cursor,draft_document_id,draft_schema_version,draft_saved,cortex_cleaned,error_code,error_message,created_at,updated_at FROM content_jobs WHERE job_id=$1 AND owner_id=$2",
     )
     .bind(job_id)
     .bind(owner)
@@ -534,6 +660,15 @@ pub async fn get(store: &Store, owner: &str, job_id: &str) -> R<Value> {
             .into_iter()
             .map(|r| r.get("file_id"))
             .collect();
+    let draft_document_id: Option<String> = row.try_get("draft_document_id")?;
+    let draft_schema_version: Option<i64> = row.try_get("draft_schema_version")?;
+    let draft = match &draft_document_id {
+        Some(doc_id) => {
+            let stored = store.docs.get(doc_id).await.map_err(NoteError::from)?;
+            stored["body"].clone()
+        }
+        None => Value::Null,
+    };
     let error = match (
         row.try_get::<Option<String>, _>("error_code")?,
         row.try_get::<Option<String>, _>("error_message")?,
@@ -551,7 +686,9 @@ pub async fn get(store: &Store, owner: &str, job_id: &str) -> R<Value> {
         "cortex_session_id": row.try_get::<Option<String>, _>("cortex_session_id")?,
         "cortex_output_id": row.try_get::<Option<String>, _>("cortex_output_id")?,
         "event_cursor": row.get::<i64, _>("event_cursor"),
-        "draft_text": row.get::<String, _>("draft_text"),
+        "draft_document_id": draft_document_id,
+        "draft_schema_version": draft_schema_version,
+        "draft": draft,
         "draft_saved": row.get::<i64, _>("draft_saved") == 1,
         "cortex_cleaned": row.get::<i64, _>("cortex_cleaned") == 1,
         "file_ids": file_ids,
@@ -617,11 +754,18 @@ pub async fn cancel(store: &Store, owner: &str, job_id: &str) -> R<Value> {
     {
         partial_text = out.text;
     }
-    let draft_saved = i64::from(!partial_text.is_empty());
+    let (doc_id, schema_name, schema_version, draft_saved) = if !partial_text.is_empty() {
+        let (doc_id, version) = save_draft(store, job_id, &partial_text).await?;
+        (Some(doc_id), Some(DRAFT_SCHEMA), Some(version), 1_i64)
+    } else {
+        (None, None, None, 0_i64)
+    };
     let changed = sqlx::query(
-        "UPDATE content_jobs SET status='cancelled',draft_text=$1,draft_saved=$2,updated_at=$3 WHERE job_id=$4 AND owner_id=$5 AND status IN ('queued','running')",
+        "UPDATE content_jobs SET status='cancelled',draft_document_id=$1,draft_schema_name=$2,draft_schema_version=$3,draft_saved=$4,updated_at=$5 WHERE job_id=$6 AND owner_id=$7 AND status IN ('queued','uploading','running')",
     )
-    .bind(&partial_text)
+    .bind(&doc_id)
+    .bind(schema_name)
+    .bind(schema_version)
     .bind(draft_saved)
     .bind(core::now())
     .bind(job_id)
