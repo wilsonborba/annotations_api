@@ -9,6 +9,7 @@ pub mod notes;
 mod posts;
 pub mod projects;
 mod rooms;
+pub mod transcriptions;
 use crate::{
     core::Result,
     domain::{App, schemas},
@@ -39,6 +40,7 @@ pub fn router(app: App) -> Router {
         .merge(projects::routes())
         .merge(media::routes())
         .merge(rooms::routes())
+        .merge(transcriptions::routes())
         .merge(admin::routes())
         // Every `/admin` route, old and new, needs the administrator access level.
         .layer(axum::middleware::from_fn(admin::guard))

@@ -62,6 +62,7 @@ fn input(representation: Representation, content: Content) -> RepresentationInpu
         representation,
         schema_version: None,
         content,
+        source_revision_id: None,
     }
 }
 fn create(key: &str, client: &str) -> SaveRequest {

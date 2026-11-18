@@ -685,6 +685,7 @@ async fn publication_and_pending_save_protect_the_file() {
             representation: Representation::Original,
             schema_version: None,
             content: Content::Document(with_image(&c)),
+            source_revision_id: None,
         }],
         metadata: None,
     };
