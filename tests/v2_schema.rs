@@ -99,7 +99,10 @@ async fn migrations_apply_on_clean_database_and_rerun_safely() {
     for migration in SQLITE_MIGRATIONS {
         let rerun: String = migration
             .lines()
-            .filter(|l| !l.starts_with("ALTER TABLE files ADD COLUMN "))
+            .filter(|l| {
+                !l.starts_with("ALTER TABLE files ADD COLUMN ")
+                    && !l.starts_with("ALTER TABLE owner_plane_containers ADD COLUMN ")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         run(&store.db, &rerun).await.unwrap();
@@ -111,6 +114,11 @@ async fn migrations_apply_on_clean_database_and_rerun_safely() {
     assert!(
         include_str!("../migrations/018_v2_file_previews.sql")
             .contains("ALTER TABLE files ADD COLUMN IF NOT EXISTS preview")
+    );
+    assert!(
+        include_str!("../migrations/023_v2_task_container_identifier.sql").contains(
+            "ALTER TABLE owner_plane_containers ADD COLUMN IF NOT EXISTS plane_identifier"
+        )
     );
     for table in V2_TABLES {
         let sql =
