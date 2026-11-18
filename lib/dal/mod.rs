@@ -6,8 +6,8 @@ pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
-/// Migrations in apply order for SQLite fixtures. 005 and 008 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 11] = [
+/// Migrations in apply order for SQLite fixtures. 005, 008 and 012 use their tested SQLite equivalents.
+pub const SQLITE_MIGRATIONS: [&str; 12] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -19,6 +19,7 @@ pub const SQLITE_MIGRATIONS: [&str; 11] = [
     include_str!("../../migrations/009_v2_note_titles.sql"),
     include_str!("../../migrations/010_v2_publication_titles.sql"),
     include_str!("../../migrations/011_v2_project_listing.sql"),
+    include_str!("../../tests/sqlite/012_v2_public_discovery.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -83,6 +84,15 @@ impl Store {
             files: files::Files::fixture(),
             http: reqwest::Client::new(),
         }
+    }
+    /// True when the relational store is PostgreSQL. SQLite stands in for it in tests;
+    /// the few statements that need a PostgreSQL type (the search index) branch on this.
+    pub fn postgres(&self) -> bool {
+        self.db
+            .connect_options()
+            .database_url
+            .scheme()
+            .starts_with("postgres")
     }
     pub async fn ready(&self) -> Result<()> {
         sqlx::query("SELECT id FROM posts LIMIT 1")

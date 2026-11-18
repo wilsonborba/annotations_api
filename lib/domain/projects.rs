@@ -521,3 +521,26 @@ pub async fn public_note_ids(
     .map(|r| r.get("note_id"))
     .collect())
 }
+
+/// The public projects of an author, in project id order after `after`, at most
+/// `limit`. Private projects give nothing. Each id is read through `public_project`.
+pub async fn public_project_ids(
+    store: &Store,
+    author_id: &str,
+    after: Option<&str>,
+    limit: i64,
+) -> R<Vec<String>> {
+    Ok(sqlx::query(
+        "SELECT p.project_id FROM projects p JOIN authors a ON a.owner_id=p.owner_id \
+         WHERE a.author_id=$1 AND p.visibility='public' AND p.project_id>$2 \
+         ORDER BY p.project_id LIMIT $3",
+    )
+    .bind(author_id)
+    .bind(after.unwrap_or(""))
+    .bind(limit)
+    .fetch_all(&store.db)
+    .await?
+    .iter()
+    .map(|r| r.get("project_id"))
+    .collect())
+}

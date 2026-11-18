@@ -7,8 +7,11 @@
 //! - The publication has its own revision (If-Match). It starts at 0 (never
 //!   published) and grows with every publish and unpublish, so a stale client
 //!   never replaces a newer publication.
-//! - Unpublish removes the published pointers and the published title. The working
-//!   copy, its revisions and the sync feed stay.
+//! - Publish saves the title and the tags of that moment with the publication and
+//!   rebuilds the search index row (`discovery::rebuild`); later title and tag
+//!   edits stay private until the next publication.
+//! - Unpublish removes the published pointers, the published title and tags and
+//!   the search index row. The working copy, its revisions and the sync feed stay.
 //! - Every public read goes through `public_note`, which applies `public_document`
 //!   to every document. Publication never changes Reports, task or quiz visibility:
 //!   embedded cards keep only their reference and a restricted marker.
@@ -16,6 +19,7 @@ use crate::{
     core,
     dal::Store,
     domain::{
+        discovery,
         note_saves::Representation,
         notes::{self, NoteError},
     },
@@ -103,6 +107,10 @@ struct State {
     language: String,
     updated_at: i64,
     title: Option<String>,
+    /// Tags saved with the publication.
+    tags: Vec<String>,
+    /// Summary from the search index; empty without published Typed text.
+    summary: String,
     items: Vec<Published>,
 }
 impl State {
@@ -137,7 +145,8 @@ where
     E: sqlx::Executor<'e, Database = sqlx::Any> + Copy,
 {
     let Some(row) = sqlx::query(
-        "SELECT p.revision,p.language_code,p.updated_at,COALESCE(t.title,'') AS title FROM note_publications p LEFT JOIN note_publication_titles t ON t.note_id=p.note_id WHERE p.note_id=$1",
+        "SELECT p.revision,p.language_code,p.updated_at,COALESCE(t.title,'') AS title,COALESCE(s.summary,'') AS summary FROM note_publications p \
+         LEFT JOIN note_publication_titles t ON t.note_id=p.note_id LEFT JOIN note_search s ON s.note_id=p.note_id WHERE p.note_id=$1",
     )
     .bind(note_id)
     .fetch_optional(db)
@@ -168,12 +177,21 @@ where
             source_created_at: r.try_get("source_created_at")?,
         });
     }
+    let tags = sqlx::query("SELECT g.name FROM note_publication_tags pt JOIN tags g ON g.tag_id=pt.tag_id WHERE pt.note_id=$1 ORDER BY g.normalized_name")
+        .bind(note_id)
+        .fetch_all(db)
+        .await?
+        .iter()
+        .map(|r| r.get("name"))
+        .collect();
     let title: String = row.get("title");
     Ok(Some(State {
         revision: row.get("revision"),
         language: row.get("language_code"),
         updated_at: row.get("updated_at"),
         title: (!title.is_empty()).then_some(title),
+        tags,
+        summary: row.get("summary"),
         items,
     }))
 }
@@ -188,6 +206,7 @@ fn owner_json(note_id: &str, state: Option<&State>) -> Value {
             "revision": 0,
             "language": Value::Null,
             "title": Value::Null,
+            "tags": [],
             "representations": [],
             "typed_uses_earlier_revision": false,
             "updated_at": Value::Null,
@@ -200,6 +219,7 @@ fn owner_json(note_id: &str, state: Option<&State>) -> Value {
         "revision": s.revision,
         "language": if published { json!(s.language) } else { Value::Null },
         "title": s.title,
+        "tags": s.tags,
         "representations": s.items.iter().map(|p| json!({
             "representation": p.representation.as_str(),
             "revision_id": p.revision_id,
@@ -315,6 +335,13 @@ pub async fn put(
         ));
     }
     chosen.sort();
+    owns(store, owner, note_id).await?;
+    // The published Typed text for the search index. Revisions never change, so
+    // reading it before the transaction is safe; an unknown id fails below.
+    let typed = match chosen.iter().find(|(r, _)| *r == Representation::Typed) {
+        Some((_, revision_id)) => typed_text(store, note_id, revision_id).await?,
+        None => None,
+    };
 
     let now = core::now();
     let mut tx = store.db.begin().await?;
@@ -410,6 +437,7 @@ pub async fn put(
         .bind(note_id)
         .execute(&mut *tx)
         .await?;
+    discovery::rebuild(&mut tx, store.postgres(), note_id, typed.as_deref()).await?;
     // The public author identity of the owner. Public reads never show the owner id.
     sqlx::query("INSERT INTO authors(author_id,owner_id) VALUES($1,$2) ON CONFLICT DO NOTHING")
         .bind(core::id())
@@ -468,10 +496,13 @@ pub async fn delete(store: &Store, owner: &str, note_id: &str, if_match: i64) ->
             .get("revision");
         return Err(conflict(current));
     }
-    // The publication row stays with its revision; pointers and title go.
+    // The publication row stays with its revision; pointers, title, tags and the
+    // search index row go, so the note leaves search at once.
     for sql in [
         "DELETE FROM note_published_representations WHERE note_id=$1",
         "DELETE FROM note_publication_titles WHERE note_id=$1",
+        "DELETE FROM note_publication_tags WHERE note_id=$1",
+        "DELETE FROM note_search WHERE note_id=$1",
     ] {
         sqlx::query(sql).bind(note_id).execute(&mut *tx).await?;
     }
@@ -487,19 +518,41 @@ pub async fn delete(store: &Store, owner: &str, note_id: &str, if_match: i64) ->
 
 // Public read -------------------------------------------------------------------
 
-/// The public form of a published note: the only function that public reads use.
-///
-/// `view` selects one published representation; `None` returns every published
-/// one. A note without a publication, or a view that is not published, is not
-/// found. The answer carries the public author id, never the owner id, and no
-/// revision or document id. `default_view` is the main representation when it is
-/// published, else the published one, so an unpublished main is never revealed.
-pub async fn public_note(store: &Store, note_id: &str, view: Option<Representation>) -> R<Value> {
+/// The text of a saved Typed revision of the note, for the search index.
+async fn typed_text(store: &Store, note_id: &str, revision_id: &str) -> R<Option<String>> {
+    let Some(row) = sqlx::query("SELECT document_id FROM note_revisions WHERE revision_id=$1 AND note_id=$2 AND representation='typed'")
+        .bind(revision_id)
+        .bind(note_id)
+        .fetch_optional(&store.db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let stored = store
+        .docs
+        .get(&row.get::<String, _>("document_id"))
+        .await
+        .map_err(|_| NoteError::from(core::Error::unavailable()))?;
+    Ok(Some(discovery::typed_text(&stored["body"])))
+}
+
+/// The public name of an author: the owner display name, `null` when empty.
+pub(crate) fn author_name(display_name: String) -> Value {
+    if display_name.is_empty() {
+        Value::Null
+    } else {
+        Value::String(display_name)
+    }
+}
+
+/// The published state of a note and its public header: everything a reader
+/// sees except the documents. Not published is not found.
+async fn public_header(store: &Store, note_id: &str) -> R<(State, Value)> {
     let s = state(&store.db, note_id)
         .await?
         .filter(State::published)
         .ok_or_else(NoteError::not_found)?;
-    let row = sqlx::query("SELECT n.main_representation,a.author_id FROM notes n LEFT JOIN authors a ON a.owner_id=n.owner_id WHERE n.note_id=$1")
+    let row = sqlx::query("SELECT n.main_representation,a.author_id,COALESCE(o.display_name,'') AS display_name FROM notes n LEFT JOIN authors a ON a.owner_id=n.owner_id LEFT JOIN owners o ON o.id=n.owner_id WHERE n.note_id=$1")
         .bind(note_id)
         .fetch_optional(&store.db)
         .await?
@@ -507,6 +560,40 @@ pub async fn public_note(store: &Store, note_id: &str, view: Option<Representati
     let main = Representation::parse(&row.get::<String, _>("main_representation"));
     let views: Vec<Representation> = s.items.iter().map(|p| p.representation).collect();
     let default_view = main.filter(|m| views.contains(m)).unwrap_or(views[0]);
+    let header = json!({
+        "note_id": note_id,
+        "author_id": row.try_get::<Option<String>, _>("author_id")?,
+        "author_name": author_name(row.get("display_name")),
+        "language": s.language,
+        "title": s.title,
+        "summary": if s.summary.is_empty() { Value::Null } else { json!(s.summary) },
+        "tags": s.tags,
+        "views": views.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+        "default_view": default_view.as_str(),
+        "can_switch_view": views.len() > 1,
+        "typed_uses_earlier_revision": s.typed_uses_earlier_revision(),
+        "published_at": s.updated_at,
+    });
+    Ok((s, header))
+}
+
+/// The public list form of a published note: the header of `public_note`
+/// without documents. Used by public discovery lists.
+pub async fn public_summary(store: &Store, note_id: &str) -> R<Value> {
+    Ok(public_header(store, note_id).await?.1)
+}
+
+/// The public form of a published note: the only function that public reads use.
+///
+/// `view` selects one published representation; `None` returns every published
+/// one. A note without a publication, or a view that is not published, is not
+/// found. The answer carries the public author id, never the owner id, and no
+/// revision or document id. `default_view` is the main representation when it is
+/// published, else the published one, so an unpublished main is never revealed.
+/// `can_switch_view` is true only when both representations are published. Title
+/// and tags are the ones saved at publication; the note's projects never appear.
+pub async fn public_note(store: &Store, note_id: &str, view: Option<Representation>) -> R<Value> {
+    let (s, mut out) = public_header(store, note_id).await?;
     let mut representations = vec![];
     for p in &s.items {
         if view.is_some_and(|v| v != p.representation) {
@@ -526,15 +613,6 @@ pub async fn public_note(store: &Store, note_id: &str, view: Option<Representati
     if representations.is_empty() {
         return Err(NoteError::not_found());
     }
-    Ok(json!({
-        "note_id": note_id,
-        "author_id": row.try_get::<Option<String>, _>("author_id")?,
-        "language": s.language,
-        "title": s.title,
-        "views": views.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
-        "default_view": default_view.as_str(),
-        "typed_uses_earlier_revision": s.typed_uses_earlier_revision(),
-        "published_at": s.updated_at,
-        "representations": representations,
-    }))
+    out["representations"] = Value::Array(representations);
+    Ok(out)
 }
