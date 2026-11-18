@@ -19,6 +19,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode},
 };
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -1098,4 +1099,35 @@ async fn fsm_adapter_cuts_a_full_answer_to_the_range() {
         axum::body::to_bytes(body, usize::MAX).await.unwrap().len(),
         3000
     );
+}
+
+#[tokio::test]
+async fn upload_stages_in_the_configured_folder_and_leaves_it_empty() {
+    let (mut store, router) = setup().await;
+    let staging = tempfile::tempdir().unwrap();
+    store.files = store.files.clone().with_staging_dir(staging.path());
+    let entries = |dir: &Path| std::fs::read_dir(dir).unwrap().count();
+    let bytes = png(11, 4000);
+    for good in [false, true] {
+        let r = reserve(&router, A, "a.png", "image/png", &bytes, "attachment").await;
+        let id = r.json()["file_id"].as_str().unwrap().to_string();
+        let sent = if good { bytes.clone() } else { png(12, 4000) };
+        // The second chunk is read only after the first was staged.
+        let dir = staging.path().to_path_buf();
+        let chunks = vec![sent[..100].to_vec(), sent[100..].to_vec()];
+        let stream =
+            futures_util::stream::iter(chunks.into_iter().enumerate()).map(move |(i, c)| {
+                if i == 1 {
+                    assert_eq!(
+                        entries(&dir),
+                        1,
+                        "the upload stages in the configured folder"
+                    );
+                }
+                Ok::<_, std::io::Error>(c)
+            });
+        let result = files::upload(&store, A, &id, Some("image/png"), Box::pin(stream)).await;
+        assert_eq!(result.is_ok(), good);
+        assert_eq!(entries(staging.path()), 0, "nothing stays after the upload");
+    }
 }

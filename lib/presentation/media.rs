@@ -27,12 +27,11 @@ pub fn routes() -> Router<App> {
         .route("/admin/images/{key}", get(private))
 }
 pub async fn spool(
+    files: &crate::dal::files::Files,
     field: &mut axum::extract::multipart::Field<'_>,
     limit: i64,
 ) -> Result<(tempfile::TempPath, i64)> {
-    let temp = tempfile::NamedTempFile::new()
-        .map_err(|_| Error::unavailable())?
-        .into_temp_path();
+    let temp = files.staging_file()?;
     let mut output = tokio::fs::File::create(&temp)
         .await
         .map_err(|_| Error::unavailable())?;
@@ -75,7 +74,7 @@ pub async fn upload(
     ) {
         return Err(Error::bad("Unsupported image type"));
     }
-    let (temp, size) = spool(&mut field, UPLOAD_BYTES).await?;
+    let (temp, size) = spool(&app.store.files, &mut field, UPLOAD_BYTES).await?;
     let file = app
         .store
         .files

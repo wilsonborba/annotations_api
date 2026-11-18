@@ -85,7 +85,7 @@ pub async fn upload(
             .content_type()
             .unwrap_or("application/octet-stream")
             .to_string();
-        let (temp, size) = super::media::spool(&mut field, q.size).await?;
+        let (temp, size) = super::media::spool(&app.store.files, &mut field, q.size).await?;
         if size != q.size {
             return Err(crate::core::Error::bad(
                 "Uploaded size differs from declared size",

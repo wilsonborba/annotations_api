@@ -364,15 +364,13 @@ struct Received {
 
 /// Read the body. Stop at `limit + 1` bytes. With `spool`, write it to a
 /// temporary file for the FSM upload.
-async fn receive<S, B, E>(mut body: S, limit: i64, spool: bool) -> R<Received>
+async fn receive<S, B, E>(store: &Store, mut body: S, limit: i64, spool: bool) -> R<Received>
 where
     S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
 {
     let (temp, mut output) = if spool {
-        let temp = tempfile::NamedTempFile::new()
-            .map_err(|_| unavailable())?
-            .into_temp_path();
+        let temp = store.files.staging_file().map_err(NoteError::from)?;
         let output = tokio::fs::File::create(&temp)
             .await
             .map_err(|_| unavailable())?;
@@ -477,7 +475,7 @@ where
     }
     match file.status.as_str() {
         "ready" => {
-            let same = match receive(body, file.size, false).await {
+            let same = match receive(store, body, file.size, false).await {
                 Ok(r) => r.size == file.size && r.checksum == file.checksum,
                 Err(e) if e.code == "size_mismatch" => false,
                 Err(e) => return Err(e),
@@ -536,7 +534,7 @@ where
     S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
 {
-    let received = receive(body, file.size, true).await?;
+    let received = receive(store, body, file.size, true).await?;
     verify(file, &received)?;
     let temp = received.temp.as_ref().ok_or_else(unavailable)?;
     let item = store
