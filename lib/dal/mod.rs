@@ -5,6 +5,7 @@ pub mod execution;
 pub mod files;
 pub mod links;
 pub mod models;
+pub mod plane;
 pub mod rooms;
 pub mod training;
 pub mod transcriptions;
@@ -13,7 +14,7 @@ use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012, 013, 018 and 019 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 21] = [
+pub const SQLITE_MIGRATIONS: [&str; 22] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -35,6 +36,7 @@ pub const SQLITE_MIGRATIONS: [&str; 21] = [
     include_str!("../../tests/sqlite/019_v2_model_withdrawn.sql"),
     include_str!("../../migrations/020_v2_study_links.sql"),
     include_str!("../../migrations/021_v2_content_jobs.sql"),
+    include_str!("../../migrations/022_v2_task_containers.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -47,6 +49,8 @@ pub struct Store {
     pub training_limits: training::FeedbackLimiter,
     /// Optional Cortex API client. Disabled by default when CORTEX_URL is empty.
     pub cortex: Arc<dyn cortex::CortexClient>,
+    /// Optional Plane Slim client for task cards. Disabled when PLANE_URL is empty.
+    pub plane: Arc<dyn plane::PlaneClient>,
     /// Cloud transcription execution. No server runtime exists yet.
     pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
@@ -80,6 +84,12 @@ impl Store {
             files: files::Files::new(settings.clone(), http.clone()),
             training_limits: training::FeedbackLimiter::new(redis),
             cortex: cortex::HttpCortex::client(settings.cortex_url, http.clone()),
+            plane: plane::HttpPlane::client(
+                settings.plane_url,
+                settings.plane_api_key,
+                settings.plane_workspace,
+                http.clone(),
+            ),
             execution: execution::none(),
             http,
         })
@@ -107,6 +117,7 @@ impl Store {
             files: files::Files::fixture(),
             training_limits: training::FeedbackLimiter::fixture(),
             cortex: Arc::new(cortex::DisabledCortex),
+            plane: Arc::new(plane::DisabledPlane),
             execution: execution::none(),
             http: reqwest::Client::new(),
         }
