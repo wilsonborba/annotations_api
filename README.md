@@ -71,6 +71,12 @@ Supported blocks: heading, paragraph, quote, list, image, link, source, YouTube,
 external PDF, and an individual public Reports embed. Persistent PDFs remain links;
 persistent image uploads use FSM. Private JSON is never placed in the public cache.
 
+Every `/admin` route also checks the central access level in `X-Access-Level`
+(administrator is `1`); other callers get 403 `admin_required`. The gateway sets this
+header; a trusted LAN caller sends it itself. `/admin/notes`, `/admin/projects` and
+`/admin/files` manage notes, projects and files of any owner with the same rules as
+the owner routes. Only their create bodies name an existing `owner_id`.
+
 Catalog owners may carry a `url`. Each public article returns one `author` with
 `id`, `name` and `url`; publication channels are separate from the author.
 

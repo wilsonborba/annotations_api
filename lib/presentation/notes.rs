@@ -55,12 +55,12 @@ impl<S: Send + Sync> FromRequestParts<S> for Owner {
 }
 
 /// The expected note revision from `If-Match` (`"3"` or `3`).
-fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
+pub(crate) fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
     if_match_from(headers, 1)
 }
 
 /// The expected publication revision from `If-Match`; `0` means never published.
-fn publication_if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
+pub(crate) fn publication_if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
     if_match_from(headers, 0).map_err(|e| {
         if e.code == "invalid_if_match" {
             NoteError::new(
@@ -91,7 +91,7 @@ pub(crate) fn if_match_from(headers: &HeaderMap, min: i64) -> Result<i64, NoteEr
         .ok_or_else(NoteError::invalid_if_match)
 }
 
-fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("idempotency-key")
         .map(|v| v.to_str().unwrap_or("\u{0}"))

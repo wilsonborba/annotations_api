@@ -111,9 +111,9 @@ async fn ensure_author(tx: &mut sqlx::Transaction<'_, sqlx::Any>, owner: &str) -
     Ok(())
 }
 
-const PROJECT_COLUMNS: &str = "p.project_id,p.name,p.visibility,p.revision,p.created_at,p.updated_at,(SELECT COUNT(*) FROM project_notes m WHERE m.project_id=p.project_id) AS note_count";
+pub(crate) const PROJECT_COLUMNS: &str = "p.project_id,p.name,p.visibility,p.revision,p.created_at,p.updated_at,(SELECT COUNT(*) FROM project_notes m WHERE m.project_id=p.project_id) AS note_count";
 
-fn project_json(row: &sqlx::any::AnyRow) -> Value {
+pub(crate) fn project_json(row: &sqlx::any::AnyRow) -> Value {
     json!({
         "project_id": row.get::<String, _>("project_id"),
         "name": row.get::<String, _>("name"),
@@ -152,22 +152,7 @@ pub async fn list(
     limit: Option<&str>,
 ) -> R<Value> {
     let limit = notes::page_limit(limit)?;
-    let (after_time, after_id) = match cursor {
-        None => (None, String::new()),
-        Some(c) => match c
-            .split_once('.')
-            .and_then(|(t, id)| Some((t.parse::<i64>().ok()?, id)))
-            .filter(|(_, id)| notes::token(id))
-        {
-            Some((t, id)) => (Some(t), id.to_string()),
-            None => {
-                return Err(NoteError::invalid(
-                    "invalid_cursor",
-                    "The cursor is not valid",
-                ));
-            }
-        },
-    };
+    let (after_time, after_id) = notes::keyset_cursor(cursor)?;
     let rows = sqlx::query(&format!(
         "SELECT {PROJECT_COLUMNS} FROM projects p WHERE p.owner_id=$1 \
          AND ($2=0 OR p.updated_at<$3 OR (p.updated_at=$3 AND p.project_id<$4)) \

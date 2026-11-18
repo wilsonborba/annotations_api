@@ -352,11 +352,11 @@ impl View {
     }
 }
 
-const NOTE_COLUMNS: &str = "n.note_id,n.client_note_id,n.main_representation,n.revision,n.created_at,n.updated_at,COALESCE(t.title,'') AS title";
+pub(crate) const NOTE_COLUMNS: &str = "n.note_id,n.client_note_id,n.main_representation,n.revision,n.created_at,n.updated_at,COALESCE(t.title,'') AS title";
 
 /// The summary of one note row of the owner: metadata, current revisions and
 /// whether a publication exists. No document content.
-async fn summary(store: &Store, owner: &str, row: &sqlx::any::AnyRow) -> R<Value> {
+pub(crate) async fn summary(store: &Store, owner: &str, row: &sqlx::any::AnyRow) -> R<Value> {
     let note_id: String = row.get("note_id");
     let tags: Vec<String> = sqlx::query("SELECT g.name FROM note_tags nt JOIN tags g ON g.tag_id=nt.tag_id WHERE nt.note_id=$1 ORDER BY g.normalized_name")
         .bind(&note_id).fetch_all(&store.db).await?
@@ -463,6 +463,19 @@ pub(crate) fn page_limit(raw: Option<&str>) -> R<i64> {
     }
 }
 
+/// A list cursor `"<updated_at>.<id>"`: the last item of the previous page.
+pub(crate) fn keyset_cursor(raw: Option<&str>) -> R<(Option<i64>, String)> {
+    match raw {
+        None => Ok((None, String::new())),
+        Some(c) => c
+            .split_once('.')
+            .and_then(|(t, id)| Some((t.parse::<i64>().ok()?, id)))
+            .filter(|(_, id)| token(id))
+            .map(|(t, id)| (Some(t), id.to_string()))
+            .ok_or_else(|| NoteError::invalid("invalid_cursor", "The cursor is not valid")),
+    }
+}
+
 fn like_pattern(q: &str) -> String {
     let mut out = String::from("%");
     for c in q.trim().to_lowercase().chars() {
@@ -506,24 +519,7 @@ pub async fn list(store: &Store, owner: &str, query: &ListQuery) -> R<Value> {
             .fetch_one(&store.db)
             .await?
             .get("head");
-    let (after_time, after_id) = match &query.cursor {
-        None => (None, String::new()),
-        Some(c) => {
-            let parsed = c
-                .split_once('.')
-                .and_then(|(t, id)| Some((t.parse::<i64>().ok()?, id)))
-                .filter(|(_, id)| token(id));
-            match parsed {
-                Some((t, id)) => (Some(t), id.to_string()),
-                None => {
-                    return Err(NoteError::invalid(
-                        "invalid_cursor",
-                        "The cursor is not valid",
-                    ));
-                }
-            }
-        }
-    };
+    let (after_time, after_id) = keyset_cursor(query.cursor.as_deref())?;
     let q = query.q.as_deref().map(str::trim).unwrap_or("");
     let pattern = if q.is_empty() {
         String::new()

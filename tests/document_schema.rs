@@ -55,6 +55,8 @@ async fn call(
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
+        // The gateway access level of an administrator.
+        .header("x-access-level", "1")
         .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();

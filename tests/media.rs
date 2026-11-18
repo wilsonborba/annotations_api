@@ -26,6 +26,7 @@ async fn uploaded_image_is_not_public_until_a_public_post_references_it() {
             Request::builder()
                 .method("POST")
                 .uri("/admin/images?owner_id=wilson")
+                .header("x-access-level", "1")
                 .header(
                     "content-type",
                     "multipart/form-data; boundary=test-boundary",
