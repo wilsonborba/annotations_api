@@ -17,6 +17,10 @@
 - *(files)* Stage uploads in the configurable UPLOAD_STAGING_DIR instead of the system temp folder (#27)
 - *(admin)* Add administrative note, project and file operations with the central access level (#26)
 
+### 🐛 Bug Fixes
+
+- *(links)* Bound public-page previews and validate pinned destinations on every redirect (#28)
+
 ### 💼 Other
 
 - Back-merge v1.1.0 into feature/main

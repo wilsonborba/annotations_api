@@ -6,6 +6,19 @@ use axum::{
 };
 use serde_json::json;
 
+/// Bounds for a metadata fetch, across all redirect hops and DNS lookups.
+#[derive(Clone, Copy, Debug)]
+pub struct LinkPreviewLimits {
+    pub bytes: usize,
+    pub redirects: usize,
+    pub timeout: std::time::Duration,
+}
+pub const LINK_PREVIEW_LIMITS: LinkPreviewLimits = LinkPreviewLimits {
+    bytes: 512_000,
+    redirects: 3,
+    timeout: std::time::Duration::from_secs(5),
+};
+
 pub const ROOM_SECONDS: i64 = 900;
 pub const UPLOAD_BYTES: i64 = 50_000_000;
 pub const CACHE_SECONDS: u64 = 120;
