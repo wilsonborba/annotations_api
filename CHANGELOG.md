@@ -14,6 +14,7 @@
 - *(projects)* Add owner projects, note memberships and the public project projection (#24)
 - *(discovery)* Add public note search, author-balanced shuffled browsing, authors and projects (#25)
 - *(files)* Add managed file references with FSM deduplication and safe last-reference cleanup (#27)
+- *(files)* Stage uploads in the configurable UPLOAD_STAGING_DIR instead of the system temp folder (#27)
 
 ### 💼 Other
 
