@@ -11,6 +11,15 @@ pub async fn cleanup(store: &Store, now: i64) -> Result<usize> {
     let due = store.transfers.due(now).await?;
     let mut removed = 0;
     for record in due {
+        // A timed-out FSM request can finish remotely after the HTTP future drops.
+        // Keep cleanup ownership for one request timeout before the final sweep.
+        if matches!(
+            record.status,
+            crate::dal::transfers::Status::Uploading | crate::dal::transfers::Status::Failed
+        ) && now < record.expires_at + crate::core::STORAGE_REQUEST_TIMEOUT.as_secs() as i64
+        {
+            continue;
+        }
         let Ok(files) = store.files.album(&record.album).await else {
             continue;
         };

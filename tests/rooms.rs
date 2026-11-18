@@ -751,32 +751,44 @@ async fn download_stream_stops_at_original_expiry() {
     );
 }
 #[tokio::test]
-async fn slow_upload_stops_at_expiry_and_releases_its_reservation() {
-    use futures_util::StreamExt;
+async fn slow_upload_stops_at_expiry_and_keeps_cleanup_ownership() {
     use tower::ServiceExt;
     let store = fixture::store().await;
-    fixture::create(&store, "slow-upload", annotations_api::core::now() - 899).await;
+    fixture::create(&store, "slow-upload", annotations_api::core::now() - 898).await;
+    let record = annotations_api::domain::transfers::begin(
+        &store,
+        "slow-upload",
+        "127.0.0.1",
+        fixture::metadata(b"hello"),
+        None,
+        annotations_api::core::now(),
+    )
+    .await
+    .unwrap();
     let router = annotations_api::presentation::router(annotations_api::domain::App {
         store: store.clone(),
     });
-    let start=axum::body::Bytes::from_static(b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"file.txt\"\r\nContent-Type: text/plain\r\n\r\n");
-    let stream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(start)])
-        .chain(futures_util::stream::pending());
+    let incoming =
+        futures_util::stream::pending::<std::result::Result<axum::body::Bytes, std::io::Error>>();
     let mut request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/instant/slow-upload/files?size=5")
-        .header("content-type", "multipart/form-data; boundary=b")
-        .body(axum::body::Body::from_stream(stream))
+        .method("PUT")
+        .uri(format!("/instant/slow-upload/files/{}/content", record.id))
+        .header("content-type", "text/plain")
+        .body(axum::body::Body::from_stream(incoming))
         .unwrap();
     request.extensions_mut().insert(axum::extract::ConnectInfo(
         "127.0.0.1:54321".parse::<std::net::SocketAddr>().unwrap(),
     ));
-    let response = tokio::time::timeout(std::time::Duration::from_secs(2), router.oneshot(request))
+    let response = tokio::time::timeout(std::time::Duration::from_secs(3), router.oneshot(request))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(response.status(), 410);
-    if let annotations_api::dal::transfers::Transfers::Memory(m) = &store.transfers {
-        assert!(m.lock().unwrap().is_empty());
-    }
+    assert!(store.transfers.get(&record.id).await.unwrap().is_some());
+    assert_eq!(
+        annotations_api::domain::tasks::cleanup(&store, record.expires_at + 30)
+            .await
+            .unwrap(),
+        1
+    );
 }
