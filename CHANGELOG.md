@@ -12,6 +12,7 @@
 - *(notes)* Add the owner working-copy API with manual sync, conflicts and account binding (#22)
 - *(notes)* Publish Original, Typed or both as independent public snapshots (#23)
 - *(projects)* Add owner projects, note memberships and the public project projection (#24)
+- *(discovery)* Add public note search, author-balanced shuffled browsing, authors and projects (#25)
 
 ### 💼 Other
 
