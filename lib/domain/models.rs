@@ -201,3 +201,101 @@ pub async fn detail(db: &AnyPool, version: &str) -> Result<PublicManifest> {
         )
     })
 }
+
+/// `POST /me/model_downloads` body. The account comes from the session, never the body.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadRequest {
+    pub model_version: String,
+    pub platform: String,
+}
+/// A logical download bound to one account, release and platform. It names the shared
+/// artifact by checksum and size only; the FSM reference never leaves the server.
+#[derive(Debug, Serialize)]
+pub struct Download {
+    pub download_id: String,
+    pub model_version: String,
+    pub platform: String,
+    pub size: i64,
+    pub sha256: String,
+    pub model_status: String,
+    pub created_at: i64,
+}
+/// Server-side read target of a download. Not serializable on purpose.
+pub struct DownloadContent {
+    pub fsm_reference: String,
+    pub size: i64,
+    pub sha256: String,
+}
+fn download_not_found() -> NoteError {
+    NoteError::new(
+        StatusCode::NOT_FOUND,
+        "model_download_not_found",
+        "Model download is unavailable",
+    )
+}
+impl DownloadRequest {
+    pub fn parse(body: &[u8]) -> Result<Self> {
+        let input: Self = serde_json::from_slice(body).map_err(|_| {
+            NoteError::invalid(
+                "invalid_model_download",
+                "Send model_version and platform only",
+            )
+        })?;
+        if !token(&input.model_version, 128) || !platform(&input.platform) {
+            return Err(NoteError::invalid(
+                "invalid_model_download",
+                "Unsupported model version or platform",
+            ));
+        }
+        Ok(input)
+    }
+}
+/// Create or reuse the caller's download of a served (active or retired) release artifact.
+/// Returns the download and true when this call created it.
+pub async fn create_download(
+    db: &AnyPool,
+    owner: &str,
+    input: &DownloadRequest,
+) -> Result<(Download, bool)> {
+    if !repository::served_artifact(db, &input.model_version, &input.platform).await? {
+        return Err(NoteError::new(
+            StatusCode::NOT_FOUND,
+            "model_not_found",
+            "Model release is unavailable",
+        ));
+    }
+    let id = crate::core::id();
+    let download = repository::create_download(
+        db,
+        &id,
+        owner,
+        &input.model_version,
+        &input.platform,
+        chrono::Utc::now().timestamp(),
+    )
+    .await?;
+    let created = download.download_id == id;
+    Ok((download, created))
+}
+/// The caller's own download. Another account's id reads as not found.
+pub async fn download(db: &AnyPool, owner: &str, download_id: &str) -> Result<Download> {
+    if !token(download_id, 64) {
+        return Err(download_not_found());
+    }
+    repository::download(db, owner, download_id)
+        .await?
+        .ok_or_else(download_not_found)
+}
+pub async fn download_content(
+    db: &AnyPool,
+    owner: &str,
+    download_id: &str,
+) -> Result<DownloadContent> {
+    if !token(download_id, 64) {
+        return Err(download_not_found());
+    }
+    repository::download_content(db, owner, download_id)
+        .await?
+        .ok_or_else(download_not_found)
+}

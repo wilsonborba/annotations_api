@@ -137,14 +137,16 @@ fn range(headers: &HeaderMap, size: u64) -> Result<Option<(u64, u64)>, ()> {
     Ok(Some(pair))
 }
 
-/// The file bytes with safe headers: the stored type, `nosniff`, a sandbox policy
-/// so no script runs from an upload, and a download disposition for non-images.
-pub(crate) async fn send(
+/// Stream `size` bytes of one FSM item through the backend with HTTP Range support:
+/// 200 with the whole body, 206 with `Content-Range` for one range, or 416 with
+/// `Content-Range: bytes */size` when the range cannot be served. The FSM key stays here.
+pub(crate) async fn stream(
     app: &App,
-    download: &Download,
+    reference: &str,
+    size: u64,
+    content_type: HeaderValue,
     headers: &HeaderMap,
 ) -> Result<Response, NoteError> {
-    let size = download.file.size as u64;
     let range = match range(headers, size) {
         Ok(r) => r,
         Err(()) => {
@@ -160,15 +162,9 @@ pub(crate) async fn send(
             return Ok(response);
         }
     };
-    let body = app
-        .store
-        .files
-        .read_range(download.fsm_reference(), range)
-        .await?;
+    let body = app.store.files.read_range(reference, range).await?;
     let mut response = Response::new(body);
     let h = response.headers_mut();
-    let content_type = HeaderValue::from_str(&download.file.content_type)
-        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
     h.insert(header::CONTENT_TYPE, content_type);
     h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     h.insert(
@@ -183,6 +179,43 @@ pub(crate) async fn send(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("sandbox; default-src 'none'"),
     );
+    let length = match range {
+        Some((first, last)) => {
+            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+            if let Ok(v) = HeaderValue::from_str(&format!("bytes {first}-{last}/{size}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            last - first + 1
+        }
+        None => size,
+    };
+    response
+        .headers_mut()
+        .insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    Ok(response)
+}
+
+/// The file bytes with safe headers: the stored type, `nosniff`, a sandbox policy
+/// so no script runs from an upload, and a download disposition for non-images.
+pub(crate) async fn send(
+    app: &App,
+    download: &Download,
+    headers: &HeaderMap,
+) -> Result<Response, NoteError> {
+    let content_type = HeaderValue::from_str(&download.file.content_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+    let mut response = stream(
+        app,
+        download.fsm_reference(),
+        download.file.size as u64,
+        content_type,
+        headers,
+    )
+    .await?;
+    if response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
+        return Ok(response);
+    }
+    let h = response.headers_mut();
     if let Ok(v) = HeaderValue::from_str(&format!("\"{}\"", download.file.checksum)) {
         h.insert(header::ETAG, v);
     }
@@ -197,18 +230,5 @@ pub(crate) async fn send(
             h.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    let length = match range {
-        Some((first, last)) => {
-            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
-            if let Ok(v) = HeaderValue::from_str(&format!("bytes {first}-{last}/{size}")) {
-                response.headers_mut().insert(header::CONTENT_RANGE, v);
-            }
-            last - first + 1
-        }
-        None => size,
-    };
-    response
-        .headers_mut()
-        .insert(header::CONTENT_LENGTH, HeaderValue::from(length));
     Ok(response)
 }

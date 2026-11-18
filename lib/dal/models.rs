@@ -1,6 +1,8 @@
 //! Relational model metadata. No artifact bytes, FSM requests or training data access.
 use crate::domain::{
-    models::{Listing, Manifest, PublicArtifact, PublicManifest, Result},
+    models::{
+        Download, DownloadContent, Listing, Manifest, PublicArtifact, PublicManifest, Result,
+    },
     notes::NoteError,
 };
 use axum::http::StatusCode;
@@ -169,6 +171,82 @@ pub async fn detail(db: &AnyPool, version: &str) -> Result<Option<PublicManifest
         .bind(version).fetch_optional(db).await?;
     match row {
         Some(row) => Ok(Some(public(db, row).await?)),
+        None => Ok(None),
+    }
+}
+
+/// True when the release is served (not a draft) and has an artifact for the platform.
+pub async fn served_artifact(db: &AnyPool, version: &str, platform: &str) -> Result<bool> {
+    Ok(sqlx::query("SELECT 1 FROM model_artifacts a JOIN model_releases r ON r.version=a.version WHERE a.version=$1 AND a.platform=$2 AND r.status <> 'draft'")
+        .bind(version).bind(platform).fetch_optional(db).await?.is_some())
+}
+const DOWNLOAD: &str = "SELECT d.download_id,d.version,d.platform,d.created_at,a.size,a.sha256,a.fsm_reference,r.status FROM model_downloads d JOIN model_artifacts a ON a.version=d.version AND a.platform=d.platform JOIN model_releases r ON r.version=d.version";
+fn to_download(row: &AnyRow) -> std::result::Result<Download, sqlx::Error> {
+    Ok(Download {
+        download_id: row.try_get("download_id")?,
+        model_version: row.try_get("version")?,
+        platform: row.try_get("platform")?,
+        size: row.try_get("size")?,
+        sha256: row.try_get("sha256")?,
+        model_status: row.try_get("status")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+/// Insert the download unless the account already has one for this version and platform,
+/// then return the stored row. Concurrent retries converge on one id.
+pub async fn create_download(
+    db: &AnyPool,
+    id: &str,
+    owner: &str,
+    version: &str,
+    platform: &str,
+    now: i64,
+) -> Result<Download> {
+    let mut tx = db.begin().await?;
+    sqlx::query("INSERT INTO owners(id,display_name) VALUES($1,'') ON CONFLICT(id) DO NOTHING")
+        .bind(owner)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO model_downloads(download_id,owner_id,version,platform,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(owner_id,version,platform) DO NOTHING")
+        .bind(id).bind(owner).bind(version).bind(platform).bind(now).execute(&mut *tx).await?;
+    let row = sqlx::query(&format!(
+        "{DOWNLOAD} WHERE d.owner_id=$1 AND d.version=$2 AND d.platform=$3"
+    ))
+    .bind(owner)
+    .bind(version)
+    .bind(platform)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(to_download(&row)?)
+}
+async fn own(db: &AnyPool, owner: &str, id: &str) -> Result<Option<AnyRow>> {
+    // Drafts are never served; the owner filter hides other accounts' ids.
+    Ok(sqlx::query(&format!(
+        "{DOWNLOAD} WHERE d.download_id=$1 AND d.owner_id=$2 AND r.status <> 'draft'"
+    ))
+    .bind(id)
+    .bind(owner)
+    .fetch_optional(db)
+    .await?)
+}
+pub async fn download(db: &AnyPool, owner: &str, id: &str) -> Result<Option<Download>> {
+    match own(db, owner, id).await? {
+        Some(row) => Ok(Some(to_download(&row)?)),
+        None => Ok(None),
+    }
+}
+pub async fn download_content(
+    db: &AnyPool,
+    owner: &str,
+    id: &str,
+) -> Result<Option<DownloadContent>> {
+    match own(db, owner, id).await? {
+        Some(row) => Ok(Some(DownloadContent {
+            fsm_reference: row.try_get("fsm_reference")?,
+            size: row.try_get("size")?,
+            sha256: row.try_get("sha256")?,
+        })),
         None => Ok(None),
     }
 }

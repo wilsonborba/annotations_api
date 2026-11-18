@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 28] = [
+const V2_TABLES: [&str; 29] = [
     "authors",
     "notes",
     "note_revisions",
@@ -33,6 +33,7 @@ const V2_TABLES: [&str; 28] = [
     "model_metrics",
     "model_capabilities",
     "model_default",
+    "model_downloads",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
