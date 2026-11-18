@@ -19,6 +19,7 @@
 - *(instant)* Validate v2 room documents with atomic edits, item revisions and fixed expiry (#29)
 - *(instant)* Reserve temporary file metadata, verify binary uploads and preserve expiry quotas (#30)
 - *(models)* Register model releases with server CLI commands, keep one default with rollback and serve signed-in manifests without private fields (#31)
+- *(models)* Add account-bound model downloads that stream the shared release artifact from FSM with resumable HTTP Range reads (#32)
 
 ### 🐛 Bug Fixes
 
