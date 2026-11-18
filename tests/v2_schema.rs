@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 22] = [
+const V2_TABLES: [&str; 28] = [
     "authors",
     "notes",
     "note_revisions",
@@ -27,6 +27,12 @@ const V2_TABLES: [&str; 22] = [
     "note_publication_tags",
     "note_search",
     "file_cleanup",
+    "model_releases",
+    "model_artifacts",
+    "model_languages",
+    "model_metrics",
+    "model_capabilities",
+    "model_default",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
@@ -152,7 +158,7 @@ async fn schema_has_no_json_array_or_body_columns() {
             let name = row.get::<String, _>(0).to_lowercase();
             let kind = row.get::<String, _>(1).to_lowercase();
             assert!(
-                ["text", "bigint", "integer"].contains(&kind.as_str()),
+                ["text", "bigint", "integer", "double precision"].contains(&kind.as_str()),
                 "{table}.{name} uses type {kind}"
             );
             for word in ["json", "body", "points", "content"] {

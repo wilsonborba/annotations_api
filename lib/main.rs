@@ -1,6 +1,7 @@
 use annotations_api::{core::Settings, dal::Store, domain::App, presentation};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let command = presentation::cli::parse(&std::env::args().skip(1).collect::<Vec<_>>())?;
     dotenvy::dotenv().ok();
     let settings = Settings::load();
     annotations_api::core::logs::init(&settings, annotations_api::core::logs::sender());
@@ -8,6 +9,19 @@ async fn main() -> anyhow::Result<()> {
         !settings.database_url.is_empty(),
         "DATABASE_URL is required"
     );
+    if let Some(command) = command {
+        // Registry commands use only SQL. They never start HTTP, tasks or other services.
+        sqlx::any::install_default_drivers();
+        let db = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect(&settings.database_url)
+            .await
+            .map_err(|_| anyhow::anyhow!("storage_unavailable: Registry storage is unavailable"))?;
+        let version = presentation::cli::run(&db, command).await?;
+        println!("Model release: {version}");
+        db.close().await;
+        return Ok(());
+    }
     let address = format!("{}:{}", settings.host, settings.port);
     let store = Store::connect(settings)
         .await

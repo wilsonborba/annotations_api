@@ -2,6 +2,8 @@
 
 ### 🚀 Features
 
+- *(models)* Register immutable releases with server commands, atomic default rollback and signed-in sanitized manifests (#31)
+
 - *(logs)* Add journald logger and trusted LAN stream
 - *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
 - *(schemas)* Add note document v2 families and nested item validation (#19)

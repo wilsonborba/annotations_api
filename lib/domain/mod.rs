@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod editor_rules;
 pub mod files;
 pub mod links;
+pub mod models;
 pub mod names;
 pub mod note_documents;
 pub mod note_saves;

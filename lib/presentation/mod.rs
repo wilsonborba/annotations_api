@@ -1,8 +1,10 @@
 pub mod admin;
+pub mod cli;
 pub mod discovery;
 pub mod files;
 pub mod logs;
 pub mod media;
+pub mod models;
 pub mod notes;
 mod posts;
 pub mod projects;
@@ -31,6 +33,7 @@ pub fn router(app: App) -> Router {
         )
         .merge(posts::routes())
         .merge(discovery::routes())
+        .merge(models::routes())
         .merge(notes::routes())
         .merge(files::routes())
         .merge(projects::routes())
