@@ -13,6 +13,7 @@
 - *(notes)* Publish Original, Typed or both as independent public snapshots (#23)
 - *(projects)* Add owner projects, note memberships and the public project projection (#24)
 - *(discovery)* Add public note search, author-balanced shuffled browsing, authors and projects (#25)
+- *(files)* Add managed file references with FSM deduplication and safe last-reference cleanup (#27)
 
 ### 💼 Other
 
