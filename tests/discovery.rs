@@ -933,3 +933,154 @@ async fn public_responses_show_no_private_data() {
     let document = reader["representations"][0]["document"].to_string();
     assert!(document.contains("Open text"));
 }
+
+#[tokio::test]
+async fn gateway_display_name_updates_and_thai_name_round_trips_without_trusting_client() {
+    let (_store, router) = setup().await;
+    // Percent-encoded Thai name + '+' (must not be form-decoded to a space).
+    let thai_name = "สมชาย+ใจดี";
+    let encoded: String = thai_name
+        .as_bytes()
+        .iter()
+        .map(|b| format!("%{b:02X}"))
+        .collect();
+
+    // Anonymous request with x-display-name fails with 401.
+    let anon = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/me/notes")
+                .header("x-display-name", encoded.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "client_note_id": "anon",
+                        "main_representation": "typed",
+                        "representations": {"typed": {"document": typed("x")}}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+
+    // Client-sent author_name / display_name in body is rejected.
+    let bad_body = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/me/notes")
+                .header("x-uuid", "thai-owner")
+                .header("x-display-name", encoded.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "client_note_id": "bad-author",
+                        "author_name": "Spoofed",
+                        "main_representation": "typed",
+                        "representations": {"typed": {"document": typed("x")}}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_body.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Authenticated request stores the decoded Thai name and exposes it on note, author, project.
+    let create_proj = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/me/projects")
+                .header("x-uuid", "thai-owner")
+                .header("x-display-name", encoded.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "Thai Study", "visibility": "public"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_proj.status(), StatusCode::CREATED);
+    let proj_bytes = axum::body::to_bytes(create_proj.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let project_id = serde_json::from_slice::<Value>(&proj_bytes).unwrap()["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (note_id, rev) = typed_note(&router, "thai-owner", "t1", "Thai Title", "Text").await;
+    publish_typed(&router, "thai-owner", &note_id, &rev).await;
+    let pub_note = call(
+        &router,
+        "GET",
+        &format!("/notes/{note_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(pub_note.status, StatusCode::OK);
+    assert_eq!(pub_note.body["author_name"], thai_name);
+    let author_id = pub_note.body["author_id"].as_str().unwrap().to_string();
+
+    let pub_author = call(
+        &router,
+        "GET",
+        &format!("/authors/{author_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(pub_author.status, StatusCode::OK);
+    assert_eq!(pub_author.body["name"], thai_name);
+
+    let pub_project = call(
+        &router,
+        "GET",
+        &format!("/projects/{project_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(pub_project.status, StatusCode::OK);
+    assert_eq!(pub_project.body["author_name"], thai_name);
+
+    // Updating x-display-name on a later authenticated request updates public responses.
+    let updated_resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/me/notes")
+                .header("x-uuid", "thai-owner")
+                .header("x-display-name", "Ada%20Lovelace")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated_resp.status(), StatusCode::OK);
+    let pub_note2 = call(
+        &router,
+        "GET",
+        &format!("/notes/{note_id}"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(pub_note2.body["author_name"], "Ada Lovelace");
+}

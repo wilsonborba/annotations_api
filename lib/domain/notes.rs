@@ -836,6 +836,19 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<Created> {
     }
 }
 
+/// Store the owner's public display name from the gateway header, updating only when
+/// it changes.
+pub async fn sync_display_name(store: &Store, owner: &str, name: &str) -> R<()> {
+    sqlx::query(
+        "INSERT INTO owners(id,display_name) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET display_name=EXCLUDED.display_name WHERE owners.display_name<>EXCLUDED.display_name",
+    )
+    .bind(owner)
+    .bind(name)
+    .execute(&store.db)
+    .await?;
+    Ok(())
+}
+
 /// Replace one representation completely: `{"representation", "schema_version"?, "document",
 /// "transcription_run_id"?}`. A typed save that names a completed transcription run of the
 /// caller accepts that run: the new Typed revision records the run's Original source
