@@ -2,13 +2,14 @@ pub mod cache;
 pub mod documents;
 pub mod files;
 pub mod links;
+pub mod models;
 pub mod rooms;
 pub mod transfers;
 use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012 and 013 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 13] = [
+pub const SQLITE_MIGRATIONS: [&str; 14] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -22,6 +23,7 @@ pub const SQLITE_MIGRATIONS: [&str; 13] = [
     include_str!("../../migrations/011_v2_project_listing.sql"),
     include_str!("../../tests/sqlite/012_v2_public_discovery.sql"),
     include_str!("../../tests/sqlite/013_v2_managed_files.sql"),
+    include_str!("../../migrations/014_v2_model_registry.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {

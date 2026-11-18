@@ -1,0 +1,19 @@
+{
+  "release_id": "fixture-v1",
+  "code_revision": "fixture-revision",
+  "dataset_snapshot_id": "fixture-snapshot",
+  "source_checkpoint": "fixture-checkpoint",
+  "artifacts": [{
+    "platform": "linux",
+    "fsm_reference": "fixture-distribution-reference",
+    "size": 64,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }],
+  "languages": ["en", "pt-BR", "th"],
+  "capabilities": ["handwriting"],
+  "metrics": {
+    "en": {"cer": 0.1},
+    "pt-BR": {"cer": 0.12},
+    "th": {"cer": 0.15}
+  }
+}
