@@ -319,7 +319,7 @@ async fn ready_retry_repairs_interrupted_registration_but_never_restores_deleted
         1
     );
     assert_eq!(store.files.fixture_counts(), Some((1, 1)));
-    let item = json!({"id":"card","kind":"file_card","x":0,"y":0,"width":100,"height":50,"file_id":record.id});
+    let item = json!({"id":"card","kind":"file_card","x":0,"y":0,"width":96,"height":50,"file_id":record.id});
     rooms::add(
         &store,
         "repair",
@@ -473,7 +473,7 @@ async fn ready_retry_racing_with_card_deletion_cannot_restore_a_reference() {
     send(&store, "deleted", &record.id, "uploader", b"hello")
         .await
         .unwrap();
-    let card = json!({"id":"card","kind":"file_card","x":0,"y":0,"width":100,"height":50,"file_id":record.id});
+    let card = json!({"id":"card","kind":"file_card","x":0,"y":0,"width":96,"height":50,"file_id":record.id});
     rooms::add(
         &store,
         "deleted",

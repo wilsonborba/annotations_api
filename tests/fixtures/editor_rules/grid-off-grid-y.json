@@ -1,0 +1,32 @@
+{
+  "description": "An image whose y is not a whole cell is rejected",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "i1",
+        "kind": "image",
+        "x": 0,
+        "y": 12,
+        "width": 160,
+        "height": 80,
+        "file_id": "file-image-1"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "i1"
+    ]
+  }
+}

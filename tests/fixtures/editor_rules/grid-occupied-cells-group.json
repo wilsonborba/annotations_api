@@ -1,0 +1,97 @@
+{
+  "description": "A measured height and the ink of a group take every cell they touch, so they collide",
+  "rule_id": "group_overlap",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "t1",
+        "kind": "text",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 81,
+        "spans": [
+          {
+            "text": "Block t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "kind": "text",
+        "x": 0,
+        "y": 96,
+        "width": 160,
+        "height": 40,
+        "spans": [
+          {
+            "text": "Block t2"
+          }
+        ]
+      },
+      {
+        "id": "s1",
+        "kind": "stroke",
+        "tool": "round",
+        "brush_version": 1,
+        "width": 2,
+        "color": "#000000FF",
+        "opacity": 1,
+        "samples": {
+          "x": [
+            1000,
+            6000
+          ],
+          "y": [
+            8500,
+            9600
+          ],
+          "t": [
+            0,
+            8
+          ]
+        },
+        "nodes": [
+          {
+            "x": 1000,
+            "y": 8500,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 0
+          },
+          {
+            "x": 6000,
+            "y": 9600,
+            "mode": "smooth",
+            "corner": false,
+            "sample": 1
+          }
+        ]
+      },
+      {
+        "id": "g1",
+        "kind": "group",
+        "members": [
+          "t2",
+          "s1"
+        ]
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "group_overlap",
+    "items": [
+      "t1",
+      "g1"
+    ]
+  }
+}

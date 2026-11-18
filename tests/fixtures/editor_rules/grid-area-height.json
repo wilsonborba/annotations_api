@@ -1,0 +1,32 @@
+{
+  "description": "A CSV table sets its own height, so the height must be whole cells",
+  "rule_id": "grid",
+  "family": "note-original",
+  "schema_version": 1,
+  "document": {
+    "page": {
+      "width": 800,
+      "background": {
+        "kind": "blank"
+      }
+    },
+    "items": [
+      {
+        "id": "c1",
+        "kind": "csv_table",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 100,
+        "file_id": "file-csv-1"
+      }
+    ]
+  },
+  "expected": "invalid",
+  "error": {
+    "code": "off_grid",
+    "items": [
+      "c1"
+    ]
+  }
+}

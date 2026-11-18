@@ -12,7 +12,7 @@ use annotations_api::{
 use serde_json::{Value, json};
 
 fn text(id: &str, y: i64) -> Value {
-    json!({"id":id,"kind":"text","x":0,"y":y,"width":100,"height":50,"spans":[{"text":"hello"}]})
+    json!({"id":id,"kind":"text","x":0,"y":y,"width":96,"height":50,"spans":[{"text":"hello"}]})
 }
 fn document(items: Vec<Value>) -> Value {
     json!({"page":{"width":1000,"background":{"kind":"blank"}},"items":items})
@@ -23,7 +23,7 @@ async fn populated(store: &Store, code: &str, now: i64) -> rooms::Room {
         code,
         Create {
             schema_version: 1,
-            document: document(vec![text("a", 0), text("b", 100)]),
+            document: document(vec![text("a", 0), text("b", 104)]),
         },
         now,
     )
@@ -152,7 +152,7 @@ async fn structured_overlap_rejects_but_free_shapes_overlap() {
     let store = fixture::store().await;
     populated(&store, "ink", 100).await;
     let mut overlap = text("overlap", 0);
-    overlap["x"] = json!(5);
+    overlap["x"] = json!(8);
     assert!(
         rooms::add(
             &store,
@@ -166,7 +166,7 @@ async fn structured_overlap_rejects_but_free_shapes_overlap() {
         .await
         .is_err()
     );
-    let shape = json!({"id":"shape","kind":"shape","shape":"rectangle","x":0,"y":0,"width":100,"height":50,
+    let shape = json!({"id":"shape","kind":"shape","shape":"rectangle","x":0,"y":0,"width":96,"height":50,
         "color":"#000000FF","line_width":2,"opacity":1});
     let room = rooms::add(
         &store,
@@ -202,7 +202,7 @@ async fn room_batches_are_atomic_validate_once_and_reject_stale_room_revisions()
     let store = fixture::store().await;
     populated(&store, "batch", 100).await;
     // Each intermediate state overlaps; the final swap is valid.
-    let op = json!({"op":"batch","steps":[{"op":"update","id":"a","changes":{"y":100}},
+    let op = json!({"op":"batch","steps":[{"op":"update","id":"a","changes":{"y":104}},
         {"op":"update","id":"b","changes":{"y":0}},
         {"op":"page","page":{"width":1000,"background":{"kind":"dots","spacing":20,"visibility":0.5}}}]});
     let room = rooms::patch_room(
@@ -357,7 +357,7 @@ async fn schema_publication_allowed_kinds_and_room_file_scope_are_enforced() {
         .await
         .is_err()
     );
-    let image = json!({"id":"image","kind":"image","x":0,"y":0,"width":100,"height":100,"file_id":"other-room-file"});
+    let image = json!({"id":"image","kind":"image","x":0,"y":0,"width":96,"height":100,"file_id":"other-room-file"});
     assert!(
         rooms::create(
             &store,
@@ -484,7 +484,7 @@ async fn anonymous_http_crud_returns_revisions_and_current_item_on_conflict() {
         &router,
         "PATCH",
         "/instant/http/items/a",
-        Some(json!({"expected_revision":1,"changes":{"y":20}})),
+        Some(json!({"expected_revision":1,"changes":{"y":24}})),
         None,
     )
     .await;
@@ -496,7 +496,7 @@ async fn anonymous_http_crud_returns_revisions_and_current_item_on_conflict() {
         &router,
         "PATCH",
         "/instant/http/items/a",
-        Some(json!({"expected_revision":2,"changes":{"y":20}})),
+        Some(json!({"expected_revision":2,"changes":{"y":24}})),
         None,
     )
     .await;

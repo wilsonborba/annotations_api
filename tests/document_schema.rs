@@ -174,7 +174,7 @@ async fn families_are_published_through_the_admin_routes() {
     let (status, _) = call(&router, "POST", "/admin/schemas", Some(&draft)).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     // The MVP article validator does not accept note documents.
-    let body = json!({"page":{"width":100,"background":{"kind":"blank"}},"items":[]});
+    let body = json!({"page":{"width":96,"background":{"kind":"blank"}},"items":[]});
     assert!(
         schemas::validate(&store, "note-original", None, &body)
             .await
@@ -297,7 +297,7 @@ fn fixtures_cover_every_kind_and_every_rule() {
 #[tokio::test]
 async fn files_must_be_ready_files_of_the_owner_and_schema_must_be_published() {
     let store = published().await;
-    let body = json!({"page":{"width":500,"background":{"kind":"blank"}},"items":[{"id":"i1","kind":"image","x":0,"y":0,"width":10,"height":10,"file_id":"f1"}]});
+    let body = json!({"page":{"width":500,"background":{"kind":"blank"}},"items":[{"id":"i1","kind":"image","x":0,"y":0,"width":16,"height":10,"file_id":"f1"}]});
     add_file(&store, "f1", "other-owner", "ready").await;
     let run = |owner: &'static str| {
         let store = store.clone();
@@ -317,7 +317,7 @@ async fn files_must_be_ready_files_of_the_owner_and_schema_must_be_published() {
     assert_eq!(run(OWNER).await.unwrap_err().code, "missing_file");
     assert_eq!(run("other-owner").await, Ok(1));
     add_file(&store, "f2", OWNER, "uploading").await;
-    let pending = json!({"page":{"width":500,"background":{"kind":"blank"}},"items":[{"id":"i1","kind":"file_card","x":0,"y":0,"width":10,"height":10,"file_id":"f2"}]});
+    let pending = json!({"page":{"width":500,"background":{"kind":"blank"}},"items":[{"id":"i1","kind":"file_card","x":0,"y":0,"width":16,"height":10,"file_id":"f2"}]});
     assert_eq!(
         note_documents::validate_document(
             &store,

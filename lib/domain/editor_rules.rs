@@ -10,18 +10,29 @@
 //!   behaves like free ink.
 //! - `free_ink_overlap`: free strokes, shapes and ink-only groups may overlap anything.
 //! - `page_bounds`: items stay inside the page width, at or below the page top.
+//! - `grid`: structured blocks sit on the invisible placement grid of
+//!   [`GRID_CELL`] page units. Their `x`, `y` and `width` are whole cells, and so is
+//!   the `height` of the kinds whose height the user sets ([`AREA_KINDS`]). Ink and
+//!   shape points never snap. Collisions use the occupied cells: each collision
+//!   rectangle is widened outward to whole cells.
 //!
 //! An operation is applied to a working copy first. The whole operation is then
 //! rejected if the result breaks a rule. Neighbors are never moved to make space.
 use crate::{
-    core::{Error, NoteLimits},
+    core::{Error, GRID_CELL, NoteLimits},
     domain::note_documents::{self, DocumentError, Family, FileRef},
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// Structured kinds whose height the user sets (B3.1: the CSV table area and the
+/// Reports display area). Other structured kinds take a measured or proportional
+/// height, so only their position and width are on the grid.
+pub const AREA_KINDS: [&str; 2] = ["csv_table", "reports_embed"];
+
 /// Rule ids. They are stable and shared with the app fixtures.
-pub const RULES: [&str; 6] = [
+pub const RULES: [&str; 7] = [
+    "grid",
     "block_overlap",
     "group_overlap",
     "free_ink_overlap",
@@ -54,6 +65,7 @@ impl RuleError {
     }
     pub fn message(&self) -> &'static str {
         match self.code {
+            "off_grid" => "Structured blocks must sit on whole cells of the placement grid",
             "block_overlap" => "Structured blocks must not overlap",
             "group_overlap" => {
                 "The outside rectangle of a group must not overlap another block or group"
@@ -307,6 +319,15 @@ impl Rect {
             y1: self.y1.max(o.y1),
         }
     }
+    /// The occupied cells: the rectangle widened outward to whole grid cells.
+    fn cells(&self) -> Rect {
+        Rect {
+            x0: (self.x0 / GRID_CELL).floor() * GRID_CELL,
+            y0: (self.y0 / GRID_CELL).floor() * GRID_CELL,
+            x1: (self.x1 / GRID_CELL).ceil() * GRID_CELL,
+            y1: (self.y1 / GRID_CELL).ceil() * GRID_CELL,
+        }
+    }
     fn of_points(points: impl IntoIterator<Item = (f64, f64)>) -> Option<Rect> {
         points.into_iter().fold(None, |acc, (x, y)| {
             let p = Rect {
@@ -342,6 +363,12 @@ pub fn check_placement(document: &Value) -> R<()> {
         Some("stroke" | "shape") => Role::Ink,
         _ => Role::Block,
     };
+    // Every structured block, grouped or not, sits on whole grid cells.
+    for (i, it) in items.iter().enumerate() {
+        if role(it) == Role::Block {
+            check_grid(it, i)?;
+        }
+    }
     // Direct members of each group, in document order.
     let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut grouped = vec![false; items.len()];
@@ -365,6 +392,9 @@ pub fn check_placement(document: &Value) -> R<()> {
     for i in 0..items.len() {
         rect(items, &members, &mut rects, i, 0);
     }
+    // Collisions compare occupied cells, so a block with a measured height and a
+    // group that holds ink take every cell that they touch.
+    let rects: Vec<Option<Rect>> = rects.iter().map(|r| r.map(|r| r.cells())).collect();
     // A group collides only when it contains a structured block (at any depth). A
     // group of free ink and shapes only behaves like free ink.
     let mut structured: Vec<Option<bool>> = vec![None; items.len()];
@@ -382,6 +412,24 @@ pub fn check_placement(document: &Value) -> R<()> {
     for g in groups {
         let level: Vec<usize> = members[g].iter().copied().filter(|i| collides(i)).collect();
         check_level(items, &rects, &level, &|i| role(&items[i]))?;
+    }
+    Ok(())
+}
+
+/// The grid rule of one structured block at `items[i]` (schema-valid geometry).
+fn check_grid(it: &Value, i: usize) -> R<()> {
+    let mut keys = vec!["x", "y", "width"];
+    if it["kind"].as_str().is_some_and(|k| AREA_KINDS.contains(&k)) {
+        keys.push("height");
+    }
+    for k in keys {
+        let v = it[k].as_f64().unwrap_or_default();
+        if v.rem_euclid(GRID_CELL) != 0.0 {
+            let id = it["id"].as_str().unwrap_or_default().to_string();
+            return Err(
+                RuleError::new("grid", "off_grid", format!("items[{i}].{k}")).with_items(vec![id]),
+            );
+        }
     }
     Ok(())
 }

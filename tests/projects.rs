@@ -117,7 +117,7 @@ async fn note(router: &Router, owner: &str, client: &str, metadata: Value) -> (S
         "client_note_id": client,
         "representations": {"original": {"document": {
             "page": {"width": 1000, "background": {"kind": "blank"}},
-            "items": [{"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 300, "height": 120,
+            "items": [{"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 304, "height": 120,
                        "spans": [{"text": "Cells"}]}]
         }}}
     });

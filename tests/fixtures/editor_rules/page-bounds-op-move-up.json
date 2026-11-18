@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -15,9 +15,9 @@
         "id": "t1",
         "kind": "text",
         "x": 0,
-        "y": 10,
-        "width": 200,
-        "height": 100,
+        "y": 8,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -30,7 +30,7 @@
     "op": "update",
     "id": "t1",
     "changes": {
-      "y": -1
+      "y": -8
     }
   },
   "expected": "invalid",

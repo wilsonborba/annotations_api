@@ -5,7 +5,7 @@
   "schema_version": 1,
   "document": {
     "page": {
-      "width": 1000,
+      "width": 800,
       "background": {
         "kind": "blank"
       }
@@ -16,8 +16,8 @@
         "kind": "text",
         "x": 0,
         "y": 0,
-        "width": 200,
-        "height": 100,
+        "width": 160,
+        "height": 80,
         "spans": [
           {
             "text": "Block t1"
@@ -34,10 +34,10 @@
         "item": {
           "id": "t2",
           "kind": "text",
-          "x": 300,
+          "x": 240,
           "y": 0,
-          "width": 200,
-          "height": 100,
+          "width": 160,
+          "height": 80,
           "spans": [
             {
               "text": "Block t2"
@@ -50,10 +50,10 @@
         "item": {
           "id": "t3",
           "kind": "text",
-          "x": 150,
-          "y": 50,
-          "width": 200,
-          "height": 100,
+          "x": 120,
+          "y": 40,
+          "width": 160,
+          "height": 80,
           "spans": [
             {
               "text": "Block t3"

@@ -96,7 +96,7 @@ fn original(text: &str) -> Value {
     json!({
         "page": {"width": 1000, "background": {"kind": "blank"}},
         "items": [
-            {"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 300, "height": 120,
+            {"id": "t1", "kind": "text", "x": 0, "y": 40, "width": 304, "height": 120,
              "spans": [{"text": text}]}
         ]
     })
@@ -527,16 +527,16 @@ fn embeds_original() -> Value {
     json!({
         "page": {"width": 1000, "background": {"kind": "blank"}},
         "items": [
-            {"id": "t1", "kind": "text", "x": 0, "y": 0, "width": 300, "height": 50,
+            {"id": "t1", "kind": "text", "x": 0, "y": 0, "width": 304, "height": 50,
              "spans": [{"text": "Public lesson"}]},
-            {"id": "r1", "kind": "reports_embed", "x": 0, "y": 100, "width": 400, "height": 300,
+            {"id": "r1", "kind": "reports_embed", "x": 0, "y": 104, "width": 400, "height": 304,
              "report_id": "rep-private-1", "mode": "snapshot", "source": "upload",
              "snapshot_id": "snap-private-9", "captured_at": 1_700_000_123},
-            {"id": "r2", "kind": "reports_embed", "x": 500, "y": 100, "width": 400, "height": 300,
+            {"id": "r2", "kind": "reports_embed", "x": 496, "y": 104, "width": 400, "height": 304,
              "report_id": "rep-live-2", "mode": "live", "source": "link"},
-            {"id": "c1", "kind": "task_card", "x": 0, "y": 500, "width": 300, "height": 100,
+            {"id": "c1", "kind": "task_card", "x": 0, "y": 496, "width": 304, "height": 100,
              "task_id": "task-77"},
-            {"id": "q1", "kind": "quiz_card", "x": 400, "y": 500, "width": 300, "height": 100,
+            {"id": "q1", "kind": "quiz_card", "x": 400, "y": 496, "width": 304, "height": 100,
              "study_id": "study-5", "quiz_id": "quiz-6"}
         ]
     })
@@ -636,22 +636,22 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
     assert_eq!(items[0], embeds_original()["items"][0]);
     assert_eq!(
         items[1],
-        json!({"id": "r1", "kind": "reports_embed", "x": 0, "y": 100, "width": 400, "height": 300,
+        json!({"id": "r1", "kind": "reports_embed", "x": 0, "y": 104, "width": 400, "height": 304,
                "report_id": "rep-private-1", "restricted": true})
     );
     assert_eq!(
         items[2],
-        json!({"id": "r2", "kind": "reports_embed", "x": 500, "y": 100, "width": 400, "height": 300,
+        json!({"id": "r2", "kind": "reports_embed", "x": 496, "y": 104, "width": 400, "height": 304,
                "report_id": "rep-live-2", "restricted": true})
     );
     assert_eq!(
         items[3],
-        json!({"id": "c1", "kind": "task_card", "x": 0, "y": 500, "width": 300, "height": 100,
+        json!({"id": "c1", "kind": "task_card", "x": 0, "y": 496, "width": 304, "height": 100,
                "task_id": "task-77", "restricted": true})
     );
     assert_eq!(
         items[4],
-        json!({"id": "q1", "kind": "quiz_card", "x": 400, "y": 500, "width": 300, "height": 100,
+        json!({"id": "q1", "kind": "quiz_card", "x": 400, "y": 496, "width": 304, "height": 100,
                "study_id": "study-5", "quiz_id": "quiz-6", "restricted": true})
     );
     let blocks = &public["representations"][1]["document"]["blocks"];
