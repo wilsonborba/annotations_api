@@ -199,6 +199,16 @@ pub struct TrainingLimits {
     pub max_sample_ms: i64,
     /// Rows that one export or remove step reads at most.
     pub batch: i64,
+    /// Representative `received` sample size shown in `training review`.
+    pub review_sample: i64,
+    /// Concurrent feedback requests allowed per account.
+    pub max_concurrent_per_account: usize,
+    /// Feedback requests allowed per account inside one rate window.
+    pub max_requests_per_window: usize,
+    /// Rate window duration in seconds.
+    pub rate_window_seconds: u64,
+    /// Safety expiry for an in-flight concurrency slot in Redis.
+    pub inflight_ttl_seconds: u64,
 }
 /// Default feedback bounds. One request stays far below the note body limit; the
 /// sample limit matches `NOTE_LIMITS`; pressure and tilt use the note stroke ranges.
@@ -212,6 +222,11 @@ pub const TRAINING_LIMITS: TrainingLimits = TrainingLimits {
     max_coordinate: 100_000_000,
     max_sample_ms: 600_000,
     batch: 200,
+    review_sample: 20,
+    max_concurrent_per_account: 4,
+    max_requests_per_window: 60,
+    rate_window_seconds: 60,
+    inflight_ttl_seconds: 60,
 };
 #[derive(Clone)]
 pub struct Settings {

@@ -41,6 +41,7 @@ pub struct Store {
     pub rooms: rooms::Rooms,
     pub transfers: transfers::Transfers,
     pub files: files::Files,
+    pub training_limits: training::FeedbackLimiter,
     /// Cloud transcription execution. No server runtime exists yet.
     pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
@@ -70,8 +71,9 @@ impl Store {
             docs: documents::Documents::remote(settings.clone(), http.clone()),
             cache: cache::Cache::new(redis.clone()),
             rooms: rooms::Rooms::new(redis.clone()),
-            transfers: transfers::Transfers::new(redis),
+            transfers: transfers::Transfers::new(redis.clone()),
             files: files::Files::new(settings, http.clone()),
+            training_limits: training::FeedbackLimiter::new(redis),
             execution: execution::none(),
             http,
         })
@@ -97,6 +99,7 @@ impl Store {
             rooms: rooms::Rooms::fixture(),
             transfers: transfers::Transfers::fixture(),
             files: files::Files::fixture(),
+            training_limits: training::FeedbackLimiter::fixture(),
             execution: execution::none(),
             http: reqwest::Client::new(),
         }

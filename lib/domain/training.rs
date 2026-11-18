@@ -14,7 +14,7 @@ use crate::{
     core::{self, TRAINING_LIMITS},
     dal::{
         Store,
-        training::{self as repository, ExportRow, Inserted, NewFeedback, Selection},
+        training::{self as repository, ExportRow, Inserted, NewFeedback, ReviewTarget, Selection},
     },
     domain::{
         notes::{NoteError, allow, parse_body},
@@ -313,6 +313,12 @@ fn reused() -> NoteError {
 /// event is new. A retry of a stored event returns it again; a stored event id with a
 /// different event fails and stores nothing.
 pub async fn submit(store: &Store, owner: &str, run_id: &str, raw: &[u8]) -> R<(Value, bool)> {
+    let permit = store.training_limits.acquire(owner, core::now()).await?;
+    let result = submit_inner(store, owner, run_id, raw).await;
+    permit.release().await;
+    result
+}
+async fn submit_inner(store: &Store, owner: &str, run_id: &str, raw: &[u8]) -> R<(Value, bool)> {
     if raw.len() > TRAINING_LIMITS.max_request_bytes {
         return Err(NoteError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -571,18 +577,25 @@ async fn export_line(store: &Store, row: &ExportRow) -> R<Value> {
     }))
 }
 
-/// `training export`: write received and approved examples (and flagged ones when
-/// `include_flagged` is true) as JSON Lines. Returns the number of examples written.
+/// `training export`: write `approved_for_training` examples (plus `received` and
+/// `flagged` when requested) as JSON Lines. Returns the number of examples written.
 pub async fn export(
     store: &Store,
+    include_received: bool,
     include_flagged: bool,
     out: &mut dyn std::io::Write,
 ) -> R<usize> {
     let mut after = String::new();
     let mut count = 0;
     loop {
-        let rows =
-            repository::export(&store.db, &after, TRAINING_LIMITS.batch, include_flagged).await?;
+        let rows = repository::export(
+            &store.db,
+            &after,
+            TRAINING_LIMITS.batch,
+            include_received,
+            include_flagged,
+        )
+        .await?;
         for row in &rows {
             let line = export_line(store, row).await?;
             writeln!(out, "{line}").map_err(|_| {
@@ -601,6 +614,59 @@ pub async fn export(
             _ => return Ok(count),
         }
     }
+}
+
+/// `training review`: write `flagged` examples and a representative sample of `received`
+/// examples (balanced across accounts) as JSON Lines for administrator review.
+pub async fn review(
+    store: &Store,
+    limit: Option<i64>,
+    out: &mut dyn std::io::Write,
+) -> R<(usize, usize)> {
+    let cap = limit.unwrap_or(TRAINING_LIMITS.review_sample);
+    if cap <= 0 || cap > TRAINING_LIMITS.batch {
+        return Err(NoteError::invalid(
+            "invalid_limit",
+            format!("limit must be from 1 to {}", TRAINING_LIMITS.batch),
+        ));
+    }
+    let flagged = repository::review_flagged(&store.db, cap).await?;
+    let received = repository::review_received_sample(&store.db, cap).await?;
+    for row in flagged.iter().chain(received.iter()) {
+        let line = export_line(store, row).await?;
+        writeln!(out, "{line}").map_err(|_| {
+            NoteError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "export_write_failed",
+                "Cannot write the review output",
+            )
+        })?;
+    }
+    Ok((flagged.len(), received.len()))
+}
+
+/// `training approve`: move selected examples to `approved_for_training`.
+pub async fn approve(store: &Store, target: ReviewTarget<'_>) -> R<usize> {
+    set_review_status(store, target, "approved_for_training").await
+}
+
+/// `training flag`: move selected examples to `flagged`.
+pub async fn flag(store: &Store, target: ReviewTarget<'_>) -> R<usize> {
+    set_review_status(store, target, "flagged").await
+}
+
+async fn set_review_status(store: &Store, target: ReviewTarget<'_>, status: &str) -> R<usize> {
+    let valid = match &target {
+        ReviewTarget::Run(v) | ReviewTarget::Event(v) => visible(v),
+        ReviewTarget::RunEvent(r, e) => visible(r) && visible(e),
+    };
+    if !valid {
+        return Err(NoteError::invalid(
+            "invalid_reference",
+            "The selection uses 1 to 128 visible ASCII characters",
+        ));
+    }
+    repository::set_status(&store.db, &target, status).await
 }
 
 /// `training remove`: delete the selected examples, their CouchDB documents and rows,
