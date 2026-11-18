@@ -5,7 +5,7 @@ use annotations_api::{
     dal::Store,
     domain::{
         App,
-        rooms::{self, Edit},
+        rooms::{self, Create},
         schemas,
     },
     presentation,
@@ -25,7 +25,7 @@ const B: &str = "user-b";
 
 async fn setup() -> (Store, Router) {
     let store = Store::fixture().await;
-    for name in ["note-original", "note-typed"] {
+    for name in ["note-original", "note-typed", "instant-room"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/document_schema/families")
             .join(format!("{name}.v1.json"));
@@ -828,20 +828,11 @@ async fn public_responses_show_no_private_data() {
     )
     .await;
     // An Instant room.
-    rooms::create(&store.rooms, "room-one", 100).await.unwrap();
-    rooms::edit(
-        &store.rooms,
-        "room-one",
-        Edit {
-            id: None,
-            revision: None,
-            kind: "text".into(),
-            text: "Room secret words".into(),
-        },
-        100,
-    )
-    .await
-    .unwrap();
+    rooms::create(&store, "room-one", Create { schema_version: 1, document: json!({
+        "page":{"width":1000,"background":{"kind":"blank"}},
+        "items":[{"id":"private-room-item","kind":"text","x":0,"y":0,"width":200,"height":80,
+            "spans":[{"text":"Room secret words"}]}]
+    })}, 100).await.unwrap();
 
     let author = author_of(&store, A).await;
     let mut text = String::new();

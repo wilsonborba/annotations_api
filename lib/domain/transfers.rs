@@ -1,7 +1,7 @@
 use crate::{
     core::{self, Error, Result},
     dal::{Store, transfers::Reservation},
-    domain::rooms::Item,
+    domain::rooms::File,
 };
 pub async fn begin(
     store: &Store,
@@ -21,6 +21,10 @@ pub async fn begin(
         file_key: None,
     };
     store.transfers.reserve(reservation.clone()).await?;
+    if let Err(error) = store.rooms.get(code, now).await {
+        let _ = store.transfers.release(&reservation.id).await;
+        return Err(error);
+    }
     Ok(reservation)
 }
 pub async fn attach(
@@ -34,23 +38,18 @@ pub async fn attach(
     for _ in 0..5 {
         let mut room = store.rooms.get(code, now).await?;
         let old = room.revision;
-        room.items.push(Item {
+        room.files.push(File {
             id: reservation.id.clone(),
-            kind: if file.content_type.starts_with("image/") {
-                "image".into()
-            } else {
-                "file".into()
-            },
-            text: String::new(),
             file_key: file.key.clone(),
             filename: file.filename.clone(),
             content_type: file.content_type.clone(),
             size_bytes: file.size_bytes,
         });
+        crate::domain::rooms::validate(store, &room).await?;
         room.revision += 1;
         match store.rooms.compare_set(old, &room, now).await {
-            Ok(()) => return Ok(room.public()),
-            Err(e) if e.0 == axum::http::StatusCode::CONFLICT => continue,
+            Ok(true) => return Ok(room.public()),
+            Ok(false) => continue,
             Err(e) => return Err(e),
         }
     }

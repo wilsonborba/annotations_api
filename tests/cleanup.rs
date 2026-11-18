@@ -1,11 +1,10 @@
-use annotations_api::{
-    dal::Store,
-    domain::{rooms, tasks, transfers},
-};
+#[path = "support/rooms.rs"]
+mod fixture;
+use annotations_api::domain::{tasks, transfers};
 #[tokio::test]
 async fn expiry_keeps_cleanup_references_and_preserves_permanent_media() {
-    let store = Store::fixture().await;
-    rooms::create(&store.rooms, "transfer", 100).await.unwrap();
+    let store = fixture::store().await;
+    fixture::create(&store, "transfer", 100).await;
     let reservation = transfers::begin(&store, "transfer", "ip", 5, 101)
         .await
         .unwrap();
@@ -55,8 +54,8 @@ async fn expiry_keeps_cleanup_references_and_preserves_permanent_media() {
 
 #[tokio::test]
 async fn cleanup_retries_after_file_storage_recovers() {
-    let mut store = Store::fixture().await;
-    rooms::create(&store.rooms, "retry", 100).await.unwrap();
+    let mut store = fixture::store().await;
+    fixture::create(&store, "retry", 100).await;
     let reservation = transfers::begin(&store, "retry", "ip", 5, 101)
         .await
         .unwrap();
