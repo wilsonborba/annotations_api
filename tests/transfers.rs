@@ -836,3 +836,34 @@ async fn retry_reuses_verified_alias_after_lost_storage_response() {
     assert_eq!(ready.file_key.as_deref(), Some(alias.key.as_str()));
     assert_eq!(store.files.fixture_counts(), Some((1, 1)));
 }
+#[tokio::test]
+async fn instant_rooms_accept_csv_table_and_pdf_preview_cards_on_room_files() {
+    let store = fixture::store().await;
+    fixture::create(&store, "cards", now()).await;
+    let record = reserve(&store, "cards", "uploader", Some("cards-key")).await;
+    send(&store, "cards", &record.id, "uploader", b"hello")
+        .await
+        .unwrap();
+    for (n, kind) in ["csv_table", "pdf_preview"].iter().enumerate() {
+        let item = json!({"id":kind,"kind":kind,"x":0,"y":400 + 200 * n,"width":320,"height":160,"file_id":record.id});
+        rooms::add(
+            &store,
+            "cards",
+            rooms::ItemWrite {
+                expected_revision: 0,
+                item,
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    }
+    let room = store.rooms.get("cards", now()).await.unwrap();
+    let kinds: Vec<&str> = room.document["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|it| it["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"csv_table") && kinds.contains(&"pdf_preview"));
+}

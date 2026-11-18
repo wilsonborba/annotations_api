@@ -147,13 +147,15 @@ pub const ORIGINAL_KINDS: [&str; 14] = [
     "stroke",
     "shape",
 ];
-pub const INSTANT_KINDS: [&str; 10] = [
+pub const INSTANT_KINDS: [&str; 12] = [
     "text",
     "image",
     "file_card",
     "link_card",
     "website_card",
     "youtube_card",
+    "csv_table",
+    "pdf_preview",
     "reports_embed",
     "group",
     "stroke",
