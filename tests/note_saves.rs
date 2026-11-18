@@ -136,6 +136,7 @@ fn couch_down() -> Documents {
             redis_url: String::new(),
             fsm_url: String::new(),
             fsm_key: String::new(),
+            upload_staging_dir: String::new(),
             host: String::new(),
             port: 0,
             development: false,

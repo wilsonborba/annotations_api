@@ -34,13 +34,19 @@ pub struct Files {
     pub settings: Option<Settings>,
     pub http: reqwest::Client,
     memory: Option<FixtureFiles>,
+    /// Folder for upload staging (`UPLOAD_STAGING_DIR`); `None` is the system temp folder.
+    staging: Option<std::path::PathBuf>,
 }
 impl Files {
     pub fn new(settings: Settings, http: reqwest::Client) -> Self {
+        let staging = Some(settings.upload_staging_dir.trim())
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from);
         Self {
             settings: Some(settings),
             http,
             memory: None,
+            staging,
         }
     }
     pub fn fixture() -> Self {
@@ -48,7 +54,23 @@ impl Files {
             settings: None,
             http: reqwest::Client::new(),
             memory: Some(Arc::default()),
+            staging: None,
         }
+    }
+    /// The same adapter with uploads staged in `dir`.
+    pub fn with_staging_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.staging = Some(dir.into());
+        self
+    }
+    /// A new staging file for an upload before it goes to FSM. It is removed when
+    /// the returned path drops, so a rejected or finished upload leaves nothing.
+    pub fn staging_file(&self) -> Result<tempfile::TempPath> {
+        let file = match &self.staging {
+            Some(dir) => tempfile::NamedTempFile::new_in(dir),
+            None => tempfile::NamedTempFile::new(),
+        };
+        file.map(tempfile::NamedTempFile::into_temp_path)
+            .map_err(|_| Error::unavailable())
     }
     fn url(&self, key: &str) -> Result<String> {
         let s = self.settings.as_ref().ok_or_else(Error::unavailable)?;

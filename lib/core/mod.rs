@@ -148,6 +148,8 @@ pub struct Settings {
     pub redis_url: String,
     pub fsm_url: String,
     pub fsm_key: String,
+    /// Folder for upload staging before FSM. Empty means the system temp folder.
+    pub upload_staging_dir: String,
     pub host: String,
     pub port: u16,
     pub development: bool,
@@ -169,6 +171,7 @@ impl Settings {
             redis_url: env("REDIS_URL", ""),
             fsm_url: env("FSM_URL", ""),
             fsm_key: env("FSM_API_KEY", ""),
+            upload_staging_dir: env("UPLOAD_STAGING_DIR", ""),
             host: env("HOST", "127.0.0.1"),
             port: env("PORT", "8111").parse().unwrap_or(8111),
             development: env("DEVELOPMENT_MODE", "false").parse().unwrap_or(false),
