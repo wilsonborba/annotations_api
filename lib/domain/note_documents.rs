@@ -5,7 +5,7 @@
 use crate::{
     core::{Error, NoteLimits},
     dal::Store,
-    domain::schemas,
+    domain::{schemas, stroke_samples},
 };
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -64,6 +64,7 @@ impl DocumentError {
             "document_too_large" => "The document is larger than the allowed size",
             "too_many_items" => "The document has more items than allowed",
             "too_many_samples" => "The stroke has more samples than allowed",
+            "invalid_samples" => "The stroke samples cannot be read",
             "too_many_nodes" => "The stroke or path has more nodes than allowed",
             "schema_not_published" => "A registered published schema version is required",
             "unsupported_schema_version" => "No validator exists for this schema version",
@@ -584,45 +585,38 @@ impl Ctx<'_> {
         }
         color(item, "color")?;
         opacity(item)?;
-        // Samples are stored column by column as integers: x and y in 1/100 page
+        // Samples are compact columns (stroke_samples): x and y in 1/100 page
         // units, t in ms from the stroke start, pressure 0 to 1000, tilt in mrad.
         let samples = Obj::new(item.req("samples")?, &item.at("samples"))?;
-        samples.allow(&["x", "y", "t", "pressure", "tilt"])?;
-        let xs = samples.ints("x")?;
-        if xs.is_empty() {
-            return fail("empty_array", samples.at("x"));
+        samples.allow(&["count", "data"])?;
+        let count = samples.int("count")?;
+        if count < 1 {
+            return fail("empty_array", samples.at("count"));
         }
-        if xs.len() > self.limits.max_samples_per_stroke {
+        if count as usize > self.limits.max_samples_per_stroke {
             return fail("too_many_samples", item.at("samples"));
         }
-        let column = |key: &str, required: bool| -> R<Option<Vec<i64>>> {
-            if !required && samples.opt(key).is_none() {
-                return Ok(None);
-            }
-            let values = samples.ints(key)?;
-            if values.len() != xs.len() {
-                return fail("invalid_count", samples.at(key));
-            }
-            Ok(Some(values))
-        };
-        let ys = column("y", true)?.unwrap_or_default();
-        let ts = column("t", true)?.unwrap_or_default();
-        for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
-            area.hundredths(*x, *y, &format!("{}[{i}]", samples.at("x")))?;
+        let data = samples.at("data");
+        let columns = stroke_samples::decode(count as usize, samples.str("data")?)
+            .map_err(|_| DocumentError::new("invalid_samples", data.clone()))?;
+        for (x, y) in columns.x.iter().zip(&columns.y) {
+            area.hundredths(*x, *y, &data)?;
         }
+        let ts = &columns.t;
         for (i, t) in ts.iter().enumerate() {
             if (i == 0 && *t != 0) || (i > 0 && *t < ts[i - 1]) {
-                return fail("invalid_sample_order", format!("{}[{i}]", samples.at("t")));
+                return fail("invalid_sample_order", data);
             }
         }
-        for (key, max) in [("pressure", PRESSURE_MAX), ("tilt", TILT_MAX)] {
-            if let Some(values) = column(key, false)?
-                && let Some(i) = values.iter().position(|v| *v < 0 || *v > max)
+        for (values, max) in [(&columns.pressure, PRESSURE_MAX), (&columns.tilt, TILT_MAX)] {
+            if values
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|v| *v < 0 || *v > max))
             {
-                return fail("out_of_range", format!("{}[{i}]", samples.at(key)));
+                return fail("out_of_range", data);
             }
         }
-        self.nodes(item, "nodes", area, Some(xs.len()))
+        self.nodes(item, "nodes", area, Some(columns.len()))
     }
 
     /// Editable nodes and handles use integer 1/100 page units.
@@ -1023,17 +1017,6 @@ impl<'a> Obj<'a> {
             .ok_or_else(|| DocumentError::new("invalid_type", self.at(key)))
     }
     /// An array of integers. A float or another type is `invalid_type` at its index.
-    fn ints(&self, key: &str) -> R<Vec<i64>> {
-        self.arr(key)?
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                v.as_i64().ok_or_else(|| {
-                    DocumentError::new("invalid_type", format!("{}[{i}]", self.at(key)))
-                })
-            })
-            .collect()
-    }
     fn range(&self, key: &str, min: f64, max: f64) -> R<f64> {
         let n = self.num(key)?;
         if n < min || n > max {

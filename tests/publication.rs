@@ -687,16 +687,18 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
             "views"
         ]
     );
-    // The stored documents keep the owner's full content.
+    // The stored documents keep the owner's full content (read through the
+    // store, which unpacks the gzip body).
     let Documents::Memory(m) = &store.docs else {
         panic!("memory double expected")
     };
-    assert!(
-        m.lock()
-            .unwrap()
-            .values()
-            .any(|d| d.to_string().contains("snap-private-9"))
-    );
+    let ids: Vec<String> = m.lock().unwrap().keys().cloned().collect();
+    let mut found = false;
+    for id in ids {
+        let stored = store.docs.get(&id).await.unwrap();
+        found |= stored.to_string().contains("snap-private-9");
+    }
+    assert!(found);
 }
 
 #[test]

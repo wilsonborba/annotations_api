@@ -540,10 +540,8 @@ async fn operations_apply_to_the_current_revision_and_inputs_are_checked() {
         .await
         .unwrap()
         .get(0);
-    let Documents::Memory(m) = &store.docs else {
-        unreachable!()
-    };
-    let stored = m.lock().unwrap()[&doc_id].clone();
+    // The store gives the body back from its gzip attachment.
+    let stored = store.docs.get(&doc_id).await.unwrap();
     assert_eq!(stored["type"], "note_revision");
     assert_eq!(stored["schema_name"], "note-original");
     assert_eq!(stored["body"]["items"][0]["x"], 496);

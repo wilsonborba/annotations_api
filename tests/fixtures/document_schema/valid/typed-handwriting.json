@@ -27,41 +27,8 @@
             "color": "#000000FF",
             "opacity": 1,
             "samples": {
-              "x": [
-                1000,
-                1400,
-                1800,
-                2200,
-                2600
-              ],
-              "y": [
-                2000,
-                2300,
-                2000,
-                2300,
-                2000
-              ],
-              "t": [
-                0,
-                8,
-                16,
-                24,
-                32
-              ],
-              "pressure": [
-                500,
-                500,
-                500,
-                500,
-                500
-              ],
-              "tilt": [
-                600,
-                600,
-                600,
-                600,
-                600
-              ]
+              "count": 5,
+              "data": "AQPQD6AGoAagBqAGoB_YBNcE2ATXBAAQEBAQ6AcAAAAAsAkAAAAA"
             },
             "nodes": [
               {

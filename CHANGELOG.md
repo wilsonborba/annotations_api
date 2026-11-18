@@ -11,6 +11,7 @@
 - *(logs)* Add journald logger and trusted LAN stream
 - *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
 - *(schemas)* Add note document v2 families and nested item validation (#19)
+- *(schemas)* Hold at least 30 dense handwritten pages in one note: compact varint stroke samples, 50,000 items and 64 MB per note, the revision body as one gzip attachment of its CouchDB document, and gzip request bodies (#19)
 - *(schemas)* Store stroke samples as integer columns (#19)
 - *(domain)* Validate editor placement rules with shared rule fixtures (#20)
 - *(domain)* Let ink-only groups overlap like free ink (#20)

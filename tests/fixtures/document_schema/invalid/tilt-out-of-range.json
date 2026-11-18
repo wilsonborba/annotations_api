@@ -29,41 +29,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            10000,
-            10400,
-            10800,
-            11200,
-            11600
-          ],
-          "y": [
-            30000,
-            30300,
-            30000,
-            30300,
-            30000
-          ],
-          "t": [
-            0,
-            8,
-            16,
-            24,
-            32
-          ],
-          "pressure": [
-            500,
-            500,
-            500,
-            500,
-            500
-          ],
-          "tilt": [
-            1600,
-            600,
-            600,
-            600,
-            600
-          ]
+          "count": 5,
+          "data": "AQOgnAGgBqAGoAagBuDUA9gE1wTYBNcEABAQEBDoBwAAAACAGc8PAAAA"
         },
         "nodes": [
           {
@@ -95,6 +62,6 @@
   "expect": {
     "valid": false,
     "code": "out_of_range",
-    "path": "items[0].samples.tilt[0]"
+    "path": "items[0].samples.data"
   }
 }

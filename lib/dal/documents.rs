@@ -1,5 +1,12 @@
+//! The CouchDB document store. A note revision keeps its `body` as one gzip
+//! attachment (`body.json.gz`) of its own CouchDB document (annotations#19,
+//! decision 32a104ee983b48ca995a7e7820839020): one revision stays one CouchDB
+//! document, and a large note does not hit the CouchDB document size.
 use crate::core::{Error, Result, Settings};
-use serde_json::Value;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use serde_json::{Value, json};
+use std::io::{Read, Write};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -51,23 +58,25 @@ impl Documents {
     }
     /// Insert immutable revision content. An identical retry is safe after an
     /// uncertain response; different content never overwrites the document.
+    /// A `body` field is stored as the gzip attachment of the document.
     pub async fn put_immutable(&self, id: &str, body: &Value) -> Result<()> {
+        let stored = packed(body)?;
         match self {
             Self::Memory(m) => {
-                let mut docs = m.lock().unwrap();
-                if let Some(existing) = docs.get(id) {
-                    if existing != body {
+                let existing = m.lock().unwrap().get(id).cloned();
+                if let Some(existing) = existing {
+                    if unpacked(existing)? != *body {
                         return Err(Error::unavailable());
                     }
                 } else {
-                    docs.insert(id.into(), body.clone());
+                    m.lock().unwrap().insert(id.into(), stored);
                 }
                 Ok(())
             }
             Self::Remote { .. } => {
                 let response = self
                     .request(reqwest::Method::PUT, id)
-                    .json(body)
+                    .json(&stored)
                     .send()
                     .await?;
                 if response.status() == reqwest::StatusCode::CONFLICT {
@@ -86,22 +95,28 @@ impl Documents {
             }
         }
     }
+    /// A document; a stored gzip body comes back as its `body` field.
     pub async fn get(&self, id: &str) -> Result<Value> {
-        match self {
+        let raw = match self {
             Self::Memory(m) => m
                 .lock()
                 .unwrap()
                 .get(id)
                 .cloned()
-                .ok_or_else(Error::missing),
+                .ok_or_else(Error::missing)?,
             Self::Remote { .. } => {
-                let r = self.request(reqwest::Method::GET, id).send().await?;
+                let r = self
+                    .request(reqwest::Method::GET, id)
+                    .query(&[("attachments", "true")])
+                    .send()
+                    .await?;
                 if r.status() == 404 {
                     return Err(Error::missing());
                 }
-                Ok(r.error_for_status()?.json().await?)
+                r.error_for_status()?.json().await?
             }
-        }
+        };
+        unpacked(raw)
     }
     pub async fn delete(&self, id: &str) -> Result<()> {
         match self {
@@ -129,4 +144,50 @@ impl Documents {
         }
         Ok(())
     }
+}
+
+/// The name of the gzip body attachment.
+const BODY: &str = "body.json.gz";
+
+/// `value` with its `body` field moved into the gzip attachment.
+fn packed(value: &Value) -> Result<Value> {
+    let Some(body) = value.get("body") else {
+        return Ok(value.clone());
+    };
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    serde_json::to_writer(&mut gz, body).map_err(|_| Error::unavailable())?;
+    let bytes = gz.finish().map_err(|_| Error::unavailable())?;
+    let mut out = value.clone();
+    let object = out.as_object_mut().ok_or_else(Error::unavailable)?;
+    object.remove("body");
+    object.insert(
+        "_attachments".into(),
+        json!({BODY: {"content_type": "application/gzip", "data": STANDARD.encode(bytes)}}),
+    );
+    Ok(out)
+}
+
+/// A stored document with its gzip attachment back in `body`. A document
+/// without the attachment comes back as stored.
+fn unpacked(mut value: Value) -> Result<Value> {
+    let Some(data) = value["_attachments"][BODY]["data"].as_str() else {
+        return Ok(value);
+    };
+    let bytes = STANDARD.decode(data).map_err(|_| Error::unavailable())?;
+    let mut text = Vec::new();
+    GzDecoder::new(&bytes[..])
+        .read_to_end(&mut text)
+        .map_err(|_| Error::unavailable())?;
+    let body: Value = serde_json::from_slice(&text).map_err(|_| Error::unavailable())?;
+    let object = value.as_object_mut().ok_or_else(Error::unavailable)?;
+    object.remove("_attachments");
+    object.insert("body".into(), body);
+    Ok(value)
+}
+
+/// Compresses a request body for tests and clients that send gzip.
+pub fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    let _ = gz.write_all(bytes);
+    gz.finish().unwrap_or_default()
 }

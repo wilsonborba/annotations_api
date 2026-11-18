@@ -15,6 +15,7 @@ pub mod projects;
 pub mod publication;
 pub mod rooms;
 pub mod schemas;
+pub mod stroke_samples;
 pub mod tasks;
 pub mod training;
 pub mod transcriptions;

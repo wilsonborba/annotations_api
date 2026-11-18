@@ -1,5 +1,5 @@
 {
-  "description": "Sample x is a float, not 1/100 page units",
+  "description": "Stroke samples flag a pressure column that is missing",
   "family": "note-original",
   "schema_version": 1,
   "files": [
@@ -29,41 +29,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            10000,
-            104.5,
-            10800,
-            11200,
-            11600
-          ],
-          "y": [
-            30000,
-            30300,
-            30000,
-            30300,
-            30000
-          ],
-          "t": [
-            0,
-            8,
-            16,
-            24,
-            32
-          ],
-          "pressure": [
-            500,
-            500,
-            500,
-            500,
-            500
-          ],
-          "tilt": [
-            600,
-            600,
-            600,
-            600,
-            600
-          ]
+          "count": 2,
+          "data": "AQHIAcgByAHIAQAQ"
         },
         "nodes": [
           {
@@ -94,7 +61,7 @@
   },
   "expect": {
     "valid": false,
-    "code": "invalid_type",
-    "path": "items[0].samples.x[1]"
+    "code": "invalid_samples",
+    "path": "items[0].samples.data"
   }
 }

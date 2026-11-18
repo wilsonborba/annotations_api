@@ -71,7 +71,8 @@ Structured blocks: `text`, `image`, `file_card`, `link_card`, `website_card`,
   the cells down to 88, and a group whose ink starts at 85 occupies the cells from 80.
 - An overlap is an intersection with a positive area of the occupied cells. Shared
   edges and corners are allowed.
-- A stroke rectangle covers every stored point: all samples, all nodes and their
+- A stroke rectangle covers every stored point: all samples (decoded from the compact
+  columns, see the document schema README), all nodes and their
   `in` and `out` handles (1/100 page units, divided by 100). A shape rectangle is
   `center` plus and minus `radius` (circle), `x`, `y`, `width`, `height` (rectangle),
   the three points (triangle), or the nodes and handles (path). Line widths are not

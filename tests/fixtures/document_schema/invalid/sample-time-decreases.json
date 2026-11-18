@@ -29,21 +29,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            1000,
-            1100,
-            1200
-          ],
-          "y": [
-            1000,
-            1000,
-            1000
-          ],
-          "t": [
-            0,
-            16,
-            8
-          ]
+          "count": 3,
+          "data": "AQDQD8gByAHQDwAAACAP"
         },
         "nodes": [
           {
@@ -75,6 +62,6 @@
   "expect": {
     "valid": false,
     "code": "invalid_sample_order",
-    "path": "items[0].samples.t[2]"
+    "path": "items[0].samples.data"
   }
 }

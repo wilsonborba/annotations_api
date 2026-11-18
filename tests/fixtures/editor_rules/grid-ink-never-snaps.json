@@ -33,21 +33,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            1234,
-            5677,
-            9101
-          ],
-          "y": [
-            333,
-            4567,
-            8911
-          ],
-          "t": [
-            0,
-            8,
-            16
-          ]
+          "count": 3,
+          "data": "AQCkE7ZFwDWaBZRC8EMAEBA"
         },
         "nodes": [
           {

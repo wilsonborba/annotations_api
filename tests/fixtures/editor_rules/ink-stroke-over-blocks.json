@@ -42,24 +42,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            4000,
-            12000,
-            20000,
-            28000
-          ],
-          "y": [
-            4000,
-            4800,
-            4000,
-            4800
-          ],
-          "t": [
-            0,
-            8,
-            16,
-            24
-          ]
+          "count": 4,
+          "data": "AQDAPoB9gH2AfcA-wAy_DMAMABAQEA"
         },
         "nodes": [
           {
