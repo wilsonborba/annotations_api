@@ -2,6 +2,7 @@
 
 ### 🚀 Features
 
+- *(waitlist)* Forward author waitlist signups to the central gateway waitlist and drop local waitlist table (#16)
 - *(tasks)* Use 10-hex Plane project identifiers with collision retry and stored identifier (#36)
 - *(gateway)* Add v2 route access-class verification test and open gateway cutover issue (#38)
 - *(tasks)* Add owner task card routes backed by per-user private Plane Slim containers (#36)

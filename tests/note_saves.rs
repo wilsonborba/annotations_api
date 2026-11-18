@@ -140,6 +140,7 @@ fn couch_down() -> Documents {
             upload_staging_dir: String::new(),
             cortex_url: String::new(),
             plane_url: String::new(),
+            gateway_url: String::new(),
             plane_api_key: String::new(),
             plane_workspace: String::new(),
             host: String::new(),

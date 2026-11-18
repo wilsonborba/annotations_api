@@ -1,5 +1,5 @@
 use crate::{
-    core::{Error, Result, now},
+    core::{Error, Result},
     dal::Store,
 };
 use serde::Deserialize;
@@ -10,7 +10,7 @@ pub struct Request {
     pub email: String,
     pub message: String,
 }
-pub async fn register(store: &Store, input: Request) -> Result<Value> {
+pub async fn register(store: &Store, input: Request, forwarded_for: Option<&str>) -> Result<Value> {
     let email = input.email.trim().to_lowercase();
     if email.len() > 254
         || email.contains(char::is_whitespace)
@@ -24,6 +24,6 @@ pub async fn register(store: &Store, input: Request) -> Result<Value> {
             "Provide an email and a message of up to 5000 characters",
         ));
     }
-    let result=sqlx::query("INSERT INTO waitlist(email,message,created_at) VALUES($1,$2,$3) ON CONFLICT(email) DO NOTHING").bind(email).bind(input.message.trim()).bind(now()).execute(&store.db).await?;
-    Ok(json!({"status":if result.rows_affected()==1{"registered"}else{"already_registered"}}))
+    store.waitlist.join(&email, forwarded_for).await?;
+    Ok(json!({"status": "registered"}))
 }

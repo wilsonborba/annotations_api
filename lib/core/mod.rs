@@ -244,6 +244,8 @@ pub struct Settings {
     pub cortex_url: String,
     /// Optional Plane Slim LAN base URL. Empty disables task card routes.
     pub plane_url: String,
+    /// Optional central gateway base URL for waitlist forwarding.
+    pub gateway_url: String,
     /// Server-held Plane Slim API key. Never exposed to clients or logs.
     pub plane_api_key: String,
     /// Plane Slim workspace slug.
@@ -272,6 +274,7 @@ impl Settings {
             upload_staging_dir: env("UPLOAD_STAGING_DIR", ""),
             cortex_url: env("CORTEX_URL", ""),
             plane_url: env("PLANE_URL", ""),
+            gateway_url: env("GATEWAY_URL", ""),
             plane_api_key: env("PLANE_API_KEY", ""),
             plane_workspace: env("PLANE_WORKSPACE", "asodya"),
             host: env("HOST", "127.0.0.1"),
