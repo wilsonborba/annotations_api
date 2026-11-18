@@ -29,6 +29,7 @@
 
 ### 🐛 Bug Fixes
 
+- *(discovery)* Sync gateway `x-display-name` into owner profile and return `author_name` on public notes, authors, and projects (#25)
 - *(training)* Add `training review`, `approve`, and `flag` CLI commands, default `training export` to approved examples, and enforce per-account Redis rate and concurrency limits on feedback (#34)
 - *(models)* Mark rolled-back releases as withdrawn, exclude them from listing and downloads, and add `models withdraw <version>` (#31)
 - *(files)* Accept any file type as a file card in Notes and Instant and serve unverified types as attachment with nosniff (#27)

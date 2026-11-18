@@ -468,8 +468,8 @@ const PUBLIC_MEMBER: &str =
 /// found.
 pub async fn public_project(store: &Store, project_id: &str) -> R<Value> {
     let row = sqlx::query(&format!(
-        "SELECT p.project_id,p.name,a.author_id,(SELECT COUNT(*) FROM project_notes m WHERE m.project_id=p.project_id AND {PUBLIC_MEMBER}) AS note_count \
-         FROM projects p LEFT JOIN authors a ON a.owner_id=p.owner_id WHERE p.project_id=$1 AND p.visibility='public'"
+        "SELECT p.project_id,p.name,a.author_id,COALESCE(o.display_name,'') AS display_name,(SELECT COUNT(*) FROM project_notes m WHERE m.project_id=p.project_id AND {PUBLIC_MEMBER}) AS note_count \
+         FROM projects p LEFT JOIN authors a ON a.owner_id=p.owner_id LEFT JOIN owners o ON o.id=p.owner_id WHERE p.project_id=$1 AND p.visibility='public'"
     ))
     .bind(project_id)
     .fetch_optional(&store.db)
@@ -478,6 +478,7 @@ pub async fn public_project(store: &Store, project_id: &str) -> R<Value> {
     Ok(json!({
         "project_id": row.get::<String, _>("project_id"),
         "author_id": row.try_get::<Option<String>, _>("author_id")?,
+        "author_name": crate::domain::publication::author_name(row.get("display_name")),
         "name": row.get::<String, _>("name"),
         "note_count": row.get::<i64, _>("note_count"),
     }))

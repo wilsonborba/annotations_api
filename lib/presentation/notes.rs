@@ -18,6 +18,8 @@ use serde_json::Value;
 
 /// The gateway header with the signed-in account id.
 pub const IDENTITY_HEADER: &str = "x-uuid";
+/// The gateway header with the percent-encoded UTF-8 account display name.
+pub const DISPLAY_NAME_HEADER: &str = "x-display-name";
 
 pub fn routes() -> Router<App> {
     Router::new()
@@ -39,18 +41,53 @@ impl IntoResponse for NoteError {
     }
 }
 
-/// The caller's account, from the gateway identity only.
+/// Decode percent-encoded UTF-8 once without form-decoding `+`.
+pub(crate) fn decode_display_name(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = (*bytes.get(i + 1)? as char).to_digit(16)?;
+            let lo = (*bytes.get(i + 2)? as char).to_digit(16)?;
+            out.push(((hi << 4) | lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let decoded = String::from_utf8(out).ok()?;
+    let trimmed = decoded.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 200 || trimmed.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// The caller's account, from the gateway identity only. Syncs `x-display-name`
+/// into `owners.display_name` when present and changed.
 pub struct Owner(pub String);
-impl<S: Send + Sync> FromRequestParts<S> for Owner {
+impl FromRequestParts<App> for Owner {
     type Rejection = NoteError;
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        parts
+    async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, Self::Rejection> {
+        let owner = parts
             .headers
             .get(IDENTITY_HEADER)
             .and_then(|v| v.to_str().ok())
             .filter(|v| (1..=128).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_graphic()))
-            .map(|v| Owner(v.to_string()))
-            .ok_or_else(NoteError::identity_required)
+            .map(str::to_string)
+            .ok_or_else(NoteError::identity_required)?;
+        if let Some(name) = parts
+            .headers
+            .get(DISPLAY_NAME_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(decode_display_name)
+        {
+            notes::sync_display_name(&state.store, &owner, &name).await?;
+        }
+        Ok(Owner(owner))
     }
 }
 
