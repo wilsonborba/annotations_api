@@ -27,6 +27,7 @@
 
 ### 🐛 Bug Fixes
 
+- *(models)* Mark rolled-back releases as withdrawn, exclude them from listing and downloads, and add `models withdraw <version>` (#31)
 - *(files)* Accept any file type as a file card in Notes and Instant and serve unverified types as attachment with nosniff (#27)
 - *(links)* Bound public-page previews and validate pinned destinations on every redirect (#28)
 

@@ -96,13 +96,26 @@ async fn cli_register_activate_rollback_and_immutable_history() {
     );
     assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
     assert_eq!(
-        models::detail(&store.db, "v2").await.unwrap().status,
-        "retired"
+        models::detail(&store.db, "v2").await.unwrap_err().code,
+        "model_withdrawn"
     );
-    // A second rollback never restores the release that was just rolled back.
+    assert!(
+        !models::list(&store.db, None, None)
+            .await
+            .unwrap()
+            .models
+            .iter()
+            .any(|m| m.version == "v2")
+    );
+    // A second rollback never restores the release that was just rolled back, and a withdrawn
+    // release cannot be activated again.
     assert_eq!(
         models::rollback(&store.db).await.unwrap_err().code,
         "model_rollback_unavailable"
+    );
+    assert_eq!(
+        models::activate(&store.db, "v2").await.unwrap_err().code,
+        "model_withdrawn"
     );
     assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
     assert_eq!(
@@ -118,19 +131,38 @@ async fn cli_register_activate_rollback_and_immutable_history() {
         models::register(&store.db, changed).await.unwrap_err().code,
         "model_release_exists"
     );
-    assert_eq!(
-        models::detail(&store.db, "v2").await.unwrap().artifacts[0].sha256,
-        "a".repeat(64)
-    );
     assert!(models::activate(&store.db, "missing").await.is_err());
     assert_eq!(pointer(&store).await, (Some("fixture-v1".into()), None));
-    // An explicit activate of a retired release keeps the older release as the rollback target.
-    models::activate(&store.db, "v2").await.unwrap();
+    // Normal activation keeps the replaced release retired; models withdraw withdraws a non-active release.
+    models::register(&store.db, fixture("v3")).await.unwrap();
+    models::activate(&store.db, "v3").await.unwrap();
     assert_eq!(
-        pointer(&store).await,
-        (Some("v2".into()), Some("fixture-v1".into()))
+        models::detail(&store.db, "fixture-v1")
+            .await
+            .unwrap()
+            .status,
+        "retired"
+    );
+    assert_eq!(
+        models::withdraw(&store.db, "v3").await.unwrap_err().code,
+        "model_active"
+    );
+    assert_eq!(
+        cli::run(&store.db, Command::Withdraw("fixture-v1".into()))
+            .await
+            .unwrap(),
+        "fixture-v1"
+    );
+    assert_eq!(pointer(&store).await, (Some("v3".into()), None));
+    assert_eq!(
+        models::detail(&store.db, "fixture-v1")
+            .await
+            .unwrap_err()
+            .code,
+        "model_withdrawn"
     );
     assert!(cli::parse(&["models".into(), "activate".into()]).is_err());
+    assert!(cli::parse(&["models".into(), "withdraw".into()]).is_err());
 }
 #[tokio::test]
 async fn signed_in_whitelist_filters_and_no_http_promotion() {
@@ -363,6 +395,19 @@ async fn binary_cli_uses_only_explicit_isolated_sqlite_and_separate_connections(
         .unwrap()
         .get("current_version");
     assert_eq!(after, previous);
+    // Withdraw the retired release (whichever of fixture-v1/v2/v3 is not active).
+    let retired: String =
+        sqlx::query("SELECT version FROM model_releases WHERE status='retired' LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap()
+            .get("version");
+    let out = run(&["models", "withdraw", &retired]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let out = run(&["models", "register", path.to_str().unwrap()]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("model_release_exists"));

@@ -134,6 +134,13 @@ pub async fn register(db: &AnyPool, manifest: Manifest) -> Result<String> {
 fn conflict(code: &str, message: &str) -> NoteError {
     NoteError::new(StatusCode::CONFLICT, code, message)
 }
+fn withdrawn_error() -> NoteError {
+    NoteError::new(
+        StatusCode::GONE,
+        "model_withdrawn",
+        "Model release has been withdrawn",
+    )
+}
 pub async fn activate(db: &AnyPool, version: &str) -> Result<String> {
     if !token(version, 128) {
         return Err(invalid());
@@ -142,6 +149,33 @@ pub async fn activate(db: &AnyPool, version: &str) -> Result<String> {
 }
 pub async fn rollback(db: &AnyPool) -> Result<String> {
     promote(db, None).await
+}
+/// Mark a non-active release as `withdrawn` so it is never listed or downloaded.
+pub async fn withdraw(db: &AnyPool, version: &str) -> Result<String> {
+    if !token(version, 128) {
+        return Err(invalid());
+    }
+    let mut tx = repository::lock_default(db).await?;
+    let status = repository::release_status(&mut tx, version)
+        .await?
+        .ok_or_else(|| {
+            NoteError::new(
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+                "Model release is unavailable",
+            )
+        })?;
+    if status == "active" {
+        return Err(conflict(
+            "model_active",
+            "Roll back or activate another release before withdrawing the active release",
+        ));
+    }
+    if status != "withdrawn" {
+        repository::mark_withdrawn(&mut tx, version).await?;
+    }
+    tx.commit().await?;
+    Ok(version.to_owned())
 }
 async fn promote(db: &AnyPool, requested: Option<&str>) -> Result<String> {
     let mut tx = repository::lock_default(db).await?;
@@ -152,19 +186,28 @@ async fn promote(db: &AnyPool, requested: Option<&str>) -> Result<String> {
             "No previous valid model release is available",
         )
     })?;
-    // Releases are immutable after registration; a retained active/retired release remains valid.
-    if !repository::exists(&mut tx, target).await? {
-        return Err(NoteError::new(
-            StatusCode::NOT_FOUND,
-            "model_not_found",
-            "Model release is unavailable",
-        ));
+    // Releases are immutable after registration; withdrawn releases cannot be activated.
+    let target_status = repository::release_status(&mut tx, target)
+        .await?
+        .ok_or_else(|| {
+            NoteError::new(
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+                "Model release is unavailable",
+            )
+        })?;
+    if target_status == "withdrawn" {
+        return Err(withdrawn_error());
     }
     if current.as_deref() != Some(target) {
-        // Activate keeps the replaced release as the rollback target. Rollback clears it,
-        // so a second rollback never brings back the release that was just rolled back.
-        let previous = requested.and(current.as_deref());
-        repository::switch(&mut tx, target, previous).await?;
+        // Activate keeps the replaced release as retired and sets it as the rollback target.
+        // Rollback marks the left release as withdrawn and clears the rollback target.
+        let (next_previous, replaced_status) = if requested.is_some() {
+            (current.as_deref(), "retired")
+        } else {
+            (None, "withdrawn")
+        };
+        repository::switch(&mut tx, target, next_previous, replaced_status).await?;
     }
     tx.commit().await?;
     Ok(target.to_owned())
@@ -193,13 +236,15 @@ pub async fn detail(db: &AnyPool, version: &str) -> Result<PublicManifest> {
             "Model release is unavailable",
         ));
     }
-    repository::detail(db, version).await?.ok_or_else(|| {
-        NoteError::new(
+    match repository::detail(db, version).await? {
+        repository::DetailRow::Manifest(m) => Ok(m),
+        repository::DetailRow::Withdrawn => Err(withdrawn_error()),
+        repository::DetailRow::Missing => Err(NoteError::new(
             StatusCode::NOT_FOUND,
             "model_not_found",
             "Model release is unavailable",
-        )
-    })
+        )),
+    }
 }
 
 /// `POST /me/model_downloads` body. The account comes from the session, never the body.
@@ -258,12 +303,16 @@ pub async fn create_download(
     owner: &str,
     input: &DownloadRequest,
 ) -> Result<(Download, bool)> {
-    if !repository::served_artifact(db, &input.model_version, &input.platform).await? {
-        return Err(NoteError::new(
-            StatusCode::NOT_FOUND,
-            "model_not_found",
-            "Model release is unavailable",
-        ));
+    match repository::served_artifact(db, &input.model_version, &input.platform).await? {
+        repository::ArtifactCheck::Ready => {}
+        repository::ArtifactCheck::Withdrawn => return Err(withdrawn_error()),
+        repository::ArtifactCheck::Missing => {
+            return Err(NoteError::new(
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+                "Model release is unavailable",
+            ));
+        }
     }
     let id = crate::core::id();
     let download = repository::create_download(
@@ -283,9 +332,11 @@ pub async fn download(db: &AnyPool, owner: &str, download_id: &str) -> Result<Do
     if !token(download_id, 64) {
         return Err(download_not_found());
     }
-    repository::download(db, owner, download_id)
-        .await?
-        .ok_or_else(download_not_found)
+    match repository::download(db, owner, download_id).await? {
+        repository::OwnDownload::Row(row) => repository::download_from_row(&row),
+        repository::OwnDownload::Withdrawn => Err(withdrawn_error()),
+        repository::OwnDownload::Missing => Err(download_not_found()),
+    }
 }
 pub async fn download_content(
     db: &AnyPool,
@@ -295,7 +346,9 @@ pub async fn download_content(
     if !token(download_id, 64) {
         return Err(download_not_found());
     }
-    repository::download_content(db, owner, download_id)
-        .await?
-        .ok_or_else(download_not_found)
+    match repository::download(db, owner, download_id).await? {
+        repository::OwnDownload::Row(row) => repository::content_from_row(&row),
+        repository::OwnDownload::Withdrawn => Err(withdrawn_error()),
+        repository::OwnDownload::Missing => Err(download_not_found()),
+    }
 }
