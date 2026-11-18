@@ -170,6 +170,10 @@ impl HttpPlane {
 fn map_status(status: StatusCode) -> Error {
     match status {
         StatusCode::NOT_FOUND => Error::missing(),
+        StatusCode::CONFLICT => Error(
+            StatusCode::CONFLICT,
+            "plane_identifier_exists: Plane project identifier already exists".into(),
+        ),
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
             Error::bad("plane_rejected: Plane rejected the task request".to_string())
         }
@@ -221,7 +225,23 @@ impl PlaneClient for HttpPlane {
                 .await
                 .map_err(|_| disabled())?;
             if !resp.status().is_success() {
-                return Err(map_status(resp.status()));
+                let status = resp.status();
+                if status == StatusCode::CONFLICT {
+                    return Err(map_status(status));
+                }
+                if matches!(
+                    status,
+                    StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+                ) {
+                    let text = resp.text().await.unwrap_or_default().to_ascii_lowercase();
+                    if text.contains("identifier")
+                        || text.contains("already exists")
+                        || text.contains("duplicate")
+                    {
+                        return Err(map_status(StatusCode::CONFLICT));
+                    }
+                }
+                return Err(map_status(status));
             }
             let body: Value = resp.json().await.map_err(|_| disabled())?;
             body["id"].as_str().map(String::from).ok_or_else(disabled)

@@ -18,7 +18,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -32,6 +32,7 @@ const B: &str = "user-b";
 struct MockPlane {
     seq: AtomicUsize,
     projects: Mutex<HashMap<String, Vec<PlaneWorkItem>>>,
+    identifiers: Mutex<HashSet<String>>,
     fail_update: AtomicBool,
 }
 
@@ -40,6 +41,7 @@ impl MockPlane {
         Arc::new(Self {
             seq: AtomicUsize::new(0),
             projects: Mutex::new(HashMap::new()),
+            identifiers: Mutex::new(HashSet::new()),
             fail_update: AtomicBool::new(false),
         })
     }
@@ -52,9 +54,17 @@ impl PlaneClient for MockPlane {
     fn create_project<'a>(
         &'a self,
         _name: &'a str,
-        _identifier: &'a str,
+        identifier: &'a str,
     ) -> BoxFuture<'a, CoreResult<String>> {
         Box::pin(async move {
+            let mut ids = self.identifiers.lock().unwrap();
+            if ids.contains(identifier) {
+                return Err(CoreError(
+                    StatusCode::CONFLICT,
+                    "plane_identifier_exists: Plane project identifier already exists".into(),
+                ));
+            }
+            ids.insert(identifier.to_string());
             let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
             let pid = format!("proj-{n}");
             self.projects.lock().unwrap().insert(pid.clone(), vec![]);
@@ -319,4 +329,44 @@ async fn user_isolation_update_failure_preserves_state_and_no_plane_secrets_leak
     )
     .await;
     assert_eq!(sd, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn identifier_collision_retries_with_next_hash_slice_and_stores_accepted() {
+    use sha2::{Digest, Sha256};
+    use sqlx::Row;
+
+    let plane = MockPlane::new();
+    let hash = format!("{:x}", Sha256::digest(A.as_bytes()));
+    let first = format!("AN{}", &hash[..10].to_ascii_uppercase());
+    let expected = format!("AN{}", &hash[1..11].to_ascii_uppercase());
+    assert_eq!(first.len(), 12);
+    assert_eq!(expected.len(), 12);
+    plane.identifiers.lock().unwrap().insert(first);
+
+    let mut store = Store::fixture().await;
+    store.plane = plane.clone();
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let (status, created) = call(
+        &router,
+        "POST",
+        "/me/tasks",
+        Some(A),
+        Some(json!({"title": "Retry collided identifier"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["title"], "Retry collided identifier");
+    assert!(plane.identifiers.lock().unwrap().contains(&expected));
+
+    let row = sqlx::query("SELECT plane_identifier FROM owner_plane_containers WHERE owner_id=$1")
+        .bind(A)
+        .fetch_one(&store.db)
+        .await
+        .unwrap();
+    let stored: String = row.get("plane_identifier");
+    assert_eq!(stored, expected);
 }

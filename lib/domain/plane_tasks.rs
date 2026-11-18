@@ -159,13 +159,40 @@ async fn ensure_container(store: &Store, owner: &str) -> R<Container> {
     }
 
     let hash = format!("{:x}", Sha256::digest(owner.as_bytes()));
-    let short_hex = &hash[..6].to_ascii_uppercase();
-    let identifier = format!("AN{short_hex}");
-    let project_name = format!("Annotations {short_hex}");
-    let project_id = store
-        .plane
-        .create_project(&project_name, &identifier)
-        .await?;
+    let max_offset = hash.len().saturating_sub(10).min(16);
+    let mut created: Option<(String, String)> = None;
+    let mut last_err = None;
+    for offset in 0..=max_offset {
+        let short_hex = &hash[offset..offset + 10].to_ascii_uppercase();
+        let identifier = format!("AN{short_hex}");
+        let project_name = format!("Annotations {short_hex}");
+        match store.plane.create_project(&project_name, &identifier).await {
+            Ok(id) => {
+                created = Some((id, identifier));
+                break;
+            }
+            Err(crate::core::Error(StatusCode::CONFLICT, _)) => {
+                last_err = Some(NoteError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "plane_unavailable",
+                    "Could not allocate a unique Plane project identifier",
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let (project_id, accepted_identifier) = match created {
+        Some(pair) => pair,
+        None => {
+            return Err(last_err.unwrap_or_else(|| {
+                NoteError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "plane_unavailable",
+                    "Could not allocate a unique Plane project identifier",
+                )
+            }));
+        }
+    };
     let states = store.plane.list_states(&project_id).await?;
     let open_state_id = states
         .iter()
@@ -198,10 +225,11 @@ async fn ensure_container(store: &Store, owner: &str) -> R<Container> {
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "INSERT INTO owner_plane_containers(owner_id,plane_project_id,open_state_id,completed_state_id,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(owner_id) DO NOTHING",
+        "INSERT INTO owner_plane_containers(owner_id,plane_project_id,plane_identifier,open_state_id,completed_state_id,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_id) DO NOTHING",
     )
     .bind(owner)
     .bind(&project_id)
+    .bind(&accepted_identifier)
     .bind(&open_state_id)
     .bind(&completed_state_id)
     .bind(core::now())
