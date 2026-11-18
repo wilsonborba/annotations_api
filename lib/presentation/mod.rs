@@ -1,4 +1,5 @@
 pub mod discovery;
+pub mod files;
 pub mod logs;
 pub mod media;
 pub mod notes;
@@ -30,6 +31,7 @@ pub fn router(app: App) -> Router {
         .merge(posts::routes())
         .merge(discovery::routes())
         .merge(notes::routes())
+        .merge(files::routes())
         .merge(projects::routes())
         .merge(media::routes())
         .merge(rooms::routes())

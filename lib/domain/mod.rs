@@ -1,5 +1,6 @@
 pub mod discovery;
 pub mod editor_rules;
+pub mod files;
 pub mod links;
 pub mod names;
 pub mod note_documents;

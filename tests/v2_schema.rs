@@ -4,7 +4,7 @@ use annotations_api::{
 };
 use sqlx::{AnyPool, Row};
 
-const V2_TABLES: [&str; 21] = [
+const V2_TABLES: [&str; 22] = [
     "authors",
     "notes",
     "note_revisions",
@@ -26,6 +26,7 @@ const V2_TABLES: [&str; 21] = [
     "note_publication_titles",
     "note_publication_tags",
     "note_search",
+    "file_cleanup",
 ];
 
 async fn run(db: &AnyPool, sql: &str) -> Result<(), sqlx::Error> {
@@ -80,9 +81,20 @@ async fn project(db: &AnyPool, id: &str, owner: &str, name: &str) -> Result<(), 
 #[tokio::test]
 async fn migrations_apply_on_clean_database_and_rerun_safely() {
     let store = Store::fixture().await;
+    // SQLite has no ADD COLUMN IF NOT EXISTS: the rerun skips the one ADD COLUMN of
+    // 013. The PostgreSQL file uses IF NOT EXISTS (checked below and on PostgreSQL).
     for migration in SQLITE_MIGRATIONS {
-        run(&store.db, migration).await.unwrap();
+        let rerun: String = migration
+            .lines()
+            .filter(|l| !l.starts_with("ALTER TABLE files ADD COLUMN filename"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        run(&store.db, &rerun).await.unwrap();
     }
+    assert!(
+        include_str!("../migrations/013_v2_managed_files.sql")
+            .contains("ALTER TABLE files ADD COLUMN IF NOT EXISTS filename")
+    );
     for table in V2_TABLES {
         let sql =
             format!("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'");
@@ -529,5 +541,126 @@ async fn change_feed_grows_and_keeps_delete_notices() {
     assert!(
         count(db, "SELECT MAX(sequence) FROM note_changes").await > feed[1].0,
         "sequence values are never reused"
+    );
+}
+
+#[test]
+fn sqlite_managed_files_equivalent_differs_only_in_value_lists() {
+    let postgres = include_str!("../migrations/013_v2_managed_files.sql");
+    let sqlite = include_str!("sqlite/013_v2_managed_files.sql");
+    fn body(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|line| {
+                !line.starts_with("--")
+                    && !line.contains("_values")
+                    && !line.contains("TRIGGER")
+                    && !line.starts_with("ALTER TABLE files ADD COLUMN")
+            })
+            .collect()
+    }
+    assert_eq!(body(postgres), body(sqlite));
+    let purposes = "('attachment','transcription','content_job')";
+    let kinds = "('note_revision','pending_operation','transcription','content_job')";
+    assert!(postgres.contains(&format!("CHECK(purpose IN {purposes})")));
+    assert!(postgres.contains(&format!("CHECK(reference_kind IN {kinds})")));
+    assert_eq!(sqlite.matches(&format!("NOT IN {purposes}")).count(), 2);
+    assert_eq!(sqlite.matches(&format!("NOT IN {kinds}")).count(), 2);
+    let filename = "CHECK(filename <> '' AND length(filename) <= 255)";
+    assert!(postgres.contains(filename) && sqlite.contains(filename));
+    // ALTER statements only add the file name column and replace named CHECKs; no data is dropped.
+    for line in postgres.lines().filter(|l| {
+        let l = l.to_lowercase();
+        l.contains("alter ") || l.contains("drop ")
+    }) {
+        assert!(
+            line.starts_with("ALTER TABLE files ADD COLUMN IF NOT EXISTS filename ")
+                || (line.starts_with("ALTER TABLE ") && line.contains(" CONSTRAINT ")),
+            "{line}"
+        );
+    }
+    for text in [postgres, sqlite] {
+        let lower = text.to_lowercase();
+        for word in ["json", "array", "[]", "insert into", "trash"] {
+            assert!(!lower.contains(word), "migration contains {word}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn file_purpose_and_reference_kind_use_value_lists() {
+    let store = seeded().await;
+    let db = &store.db;
+    let hash = "b".repeat(64);
+    let file = |id: &str, purpose: &str| {
+        format!(
+            "INSERT INTO files(file_id,owner_id,sha256,size_bytes,content_type,purpose,status,created_at,updated_at) VALUES('{id}','u1','{hash}',3,'image/png','{purpose}','reserved',1,1)"
+        )
+    };
+    for purpose in ["attachment", "transcription", "content_job"] {
+        run(db, &file(purpose, purpose)).await.unwrap();
+    }
+    assert!(run(db, &file("x", "avatar")).await.is_err());
+    assert!(
+        run(
+            db,
+            "UPDATE files SET purpose='avatar' WHERE file_id='attachment'"
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        sqlx::query("SELECT filename FROM files WHERE file_id='attachment'")
+            .fetch_one(db)
+            .await
+            .unwrap()
+            .get::<String, _>(0),
+        "file"
+    );
+    assert!(
+        run(
+            db,
+            "UPDATE files SET filename='' WHERE file_id='attachment'"
+        )
+        .await
+        .is_err()
+    );
+    for kind in [
+        "note_revision",
+        "pending_operation",
+        "transcription",
+        "content_job",
+    ] {
+        run(db, &format!("INSERT INTO file_references(file_id,reference_kind,reference_id) VALUES('attachment','{kind}','r1')")).await.unwrap();
+    }
+    assert!(run(db, "INSERT INTO file_references(file_id,reference_kind,reference_id) VALUES('attachment','undo','r1')").await.is_err());
+    assert!(
+        run(
+            db,
+            "UPDATE file_references SET reference_kind='undo' WHERE reference_kind='content_job'"
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        run(
+            db,
+            "INSERT INTO file_cleanup(fsm_reference,created_at) VALUES('',1)"
+        )
+        .await
+        .is_err()
+    );
+    run(
+        db,
+        "INSERT INTO file_cleanup(fsm_reference,created_at) VALUES('k1',1)",
+    )
+    .await
+    .unwrap();
+    assert!(
+        run(
+            db,
+            "INSERT INTO file_cleanup(fsm_reference,created_at) VALUES('k1',2)"
+        )
+        .await
+        .is_err()
     );
 }

@@ -23,7 +23,7 @@ pub fn routes() -> Router<App> {
             "/admin/images",
             post(upload).layer(DefaultBodyLimit::max(UPLOAD_BYTES as usize + 1024 * 1024)),
         )
-        .route("/media/{key}", get(public))
+        .route("/media/{key}", get(media))
         .route("/admin/images/{key}", get(private))
 }
 pub async fn spool(
@@ -107,6 +107,7 @@ async fn response(app: &App, key: &str, private: bool) -> Result<Response> {
         content_type: r.get("content_type"),
         size_bytes: r.get("size_bytes"),
         album: String::new(),
+        checksum_sha256: String::new(),
     };
     let mut response = Response::new(app.store.files.read(key).await?);
     response.headers_mut().insert(
@@ -125,6 +126,32 @@ async fn response(app: &App, key: &str, private: bool) -> Result<Response> {
 }
 pub async fn public(State(app): State<App>, Path(key): Path<String>) -> Result<Response> {
     response(&app, &key, false).await
+}
+#[derive(serde::Deserialize)]
+pub struct MediaParams {
+    note_id: Option<String>,
+    view: Option<String>,
+}
+/// `GET /media/{file_id}?note_id=&view=` serves a managed file of a published
+/// note (`domain::files::public_media`). Without `note_id` it serves legacy post media.
+async fn media(
+    State(app): State<App>,
+    Path(key): Path<String>,
+    Query(p): Query<MediaParams>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    use axum::response::IntoResponse;
+    let Some(note_id) = p.note_id else {
+        return public(State(app), Path(key)).await.into_response();
+    };
+    let sent = async {
+        let download =
+            crate::domain::files::public_media(&app.store, &key, &note_id, p.view.as_deref())
+                .await?;
+        super::files::send(&app, &download, &headers).await
+    }
+    .await;
+    sent.into_response()
 }
 pub async fn private(State(app): State<App>, Path(key): Path<String>) -> Result<Response> {
     response(&app, &key, true).await

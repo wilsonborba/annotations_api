@@ -376,6 +376,7 @@ impl Pending {
             .bind(&operation_id)
             .execute(&mut *tx)
             .await?;
+            hold_files(&mut tx, &operation_id, owner, &items).await?;
             tx.commit().await?;
             return Ok(Begin::Run(Pending {
                 operation_id,
@@ -431,6 +432,7 @@ impl Pending {
             .execute(&mut *tx)
             .await?;
         }
+        hold_files(&mut tx, &operation_id, owner, &items).await?;
         tx.commit().await?;
         Ok(Begin::Run(Pending {
             operation_id,
@@ -598,6 +600,8 @@ impl Pending {
                 }
             }
         }
+        // The revision references now protect the files.
+        release_files(&mut tx, &self.operation_id).await?;
         if let Some(metadata) = &self.metadata {
             save_metadata(&mut tx, &self.note_id, &self.owner_id, metadata).await?;
         }
@@ -748,6 +752,7 @@ async fn settle_inner(
     .bind(operation_id)
     .execute(&mut *tx)
     .await?;
+    release_files(&mut tx, operation_id).await?;
     sqlx::query("UPDATE note_save_operations SET updated_at=$1 WHERE operation_id=$2")
         .bind(now)
         .bind(operation_id)
@@ -755,6 +760,49 @@ async fn settle_inner(
         .await?;
     tx.commit().await?;
     Ok(Settled::Failed)
+}
+
+/// Protect the files of a running save with `pending_operation` references, so a
+/// file release waits (409) until the save commits or fails. A file that is no
+/// longer ready for the owner stops the save before any document is written.
+async fn hold_files(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    operation_id: &str,
+    owner: &str,
+    items: &[Prepared],
+) -> R<()> {
+    release_files(tx, operation_id).await?;
+    let mut held: Vec<&str> = vec![];
+    for file in items.iter().flat_map(|i| &i.files) {
+        if held.contains(&file.file_id.as_str()) {
+            continue;
+        }
+        let added = sqlx::query(
+            "INSERT INTO file_references(file_id,reference_kind,reference_id) SELECT file_id,'pending_operation',$2 FROM files WHERE file_id=$1 AND owner_id=$3 AND status='ready' AND fsm_reference IS NOT NULL",
+        )
+        .bind(&file.file_id)
+        .bind(operation_id)
+        .bind(owner)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+        if added != 1 {
+            return Err(DocumentError::new("missing_file", file.path.clone()).into());
+        }
+        held.push(&file.file_id);
+    }
+    Ok(())
+}
+
+/// Remove the `pending_operation` references of a save that committed or failed.
+async fn release_files(tx: &mut sqlx::Transaction<'_, sqlx::Any>, operation_id: &str) -> R<()> {
+    sqlx::query(
+        "DELETE FROM file_references WHERE reference_kind='pending_operation' AND reference_id=$1",
+    )
+    .bind(operation_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Remove revisions created before `before` that are not current, not published

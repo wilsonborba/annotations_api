@@ -1,7 +1,10 @@
 use crate::{
-    core::{Result, SAVE_SETTINGS, SaveSettings},
+    core::{FILE_SETTINGS, Result, SAVE_SETTINGS, SaveSettings},
     dal::Store,
-    domain::note_saves::{self, Settled},
+    domain::{
+        files,
+        note_saves::{self, Settled},
+    },
 };
 /// Room access expires independently. Ownership stays until deletion succeeds.
 pub async fn cleanup(store: &Store, now: i64) -> Result<usize> {
@@ -97,6 +100,12 @@ pub fn spawn(store: Store) -> tokio::task::JoinHandle<()> {
                 .is_err()
             {
                 tracing::warn!("Note save reconciliation is pending; it will retry");
+            }
+            if files::cleanup(&store, crate::core::now(), &FILE_SETTINGS)
+                .await
+                .is_err()
+            {
+                tracing::warn!("Managed file cleanup is pending; it will retry");
             }
         }
     })

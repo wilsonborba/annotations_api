@@ -186,9 +186,16 @@ async fn crash_after_document_write_leaves_no_visible_change_and_task_removes_or
     assert!(has_document(&store, &orphan));
     assert_eq!(visible(&store, &note.note_id).await, before);
     assert_eq!(
-        count(&store, "SELECT COUNT(*) FROM file_references").await,
+        count(
+            &store,
+            "SELECT COUNT(*) FROM file_references WHERE reference_kind='note_revision'"
+        )
+        .await,
         1
     );
+    // The running save holds its files until it commits or fails.
+    let held = "SELECT COUNT(*) FROM file_references WHERE reference_kind='pending_operation'";
+    assert_eq!(count(&store, held).await, 1);
     // Inside the grace period the task leaves a running save alone.
     let early = tasks::reconcile(&store, core::now(), &SAVE_SETTINGS)
         .await
@@ -203,11 +210,13 @@ async fn crash_after_document_write_leaves_no_visible_change_and_task_removes_or
     assert_eq!(late.cleaned, 1);
     assert!(!has_document(&store, &orphan));
     assert_eq!(state(&store, pending.operation_id()).await, "failed");
+    assert_eq!(count(&store, held).await, 0);
     assert_eq!(visible(&store, &note.note_id).await, before);
     // A retry of the same operation runs again and saves once.
     let result = note_saves::save(&store, &request).await.unwrap();
     assert_eq!(result.revision, 2);
     assert_eq!(state(&store, pending.operation_id()).await, "done");
+    assert_eq!(count(&store, held).await, 0);
     assert_eq!(document_count(&store), 2);
 }
 
