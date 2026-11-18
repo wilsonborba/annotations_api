@@ -6,7 +6,7 @@ use annotations_api::{
         note_documents::{
             self, DocumentError, Family, FileScope, INSTANT_KINDS, ORIGINAL_KINDS, TYPED_KINDS,
         },
-        schemas,
+        schemas, stroke_samples,
     },
 };
 use axum::{
@@ -282,6 +282,7 @@ fn fixtures_cover_every_kind_and_every_rule() {
         "empty_array",
         "invalid_count",
         "invalid_sample_order",
+        "invalid_samples",
         "missing_reference",
         "missing_file",
         "group_cycle",
@@ -385,7 +386,7 @@ fn realistic_notes_fit_the_limits() {
                 json!({"x":xs[j],"y":ys[j],"in":{"x":xs[j] - 211,"y":ys[j]},"out":{"x":xs[j] + 211,"y":ys[j]},"mode":"smooth","corner":false,"sample":j})
             })
             .collect();
-        json!({"id":format!("s{i}"),"kind":"stroke","tool":"round","brush_version":1,"width":2.5,"color":"#000000FF","opacity":1,"samples":{"x":xs,"y":ys,"t":ts,"pressure":ps,"tilt":tilts},"nodes":n})
+        json!({"id":format!("s{i}"),"kind":"stroke","tool":"round","brush_version":1,"width":2.5,"color":"#000000FF","opacity":1,"samples":stroke_samples::encode(&stroke_samples::Columns{x:xs,y:ys,t:ts.iter().map(|t|*t as i64).collect(),pressure:Some(ps),tilt:Some(tilts)}),"nodes":n})
     }
     let samples = (240.0_f64 * 0.35).round() as usize;
     let one = serde_json::to_vec(&stroke(0, samples)).unwrap().len();
@@ -402,11 +403,19 @@ fn realistic_notes_fit_the_limits() {
     println!(
         "samples per stroke {samples}; bytes per stroke {one} (samples {sample_bytes}, nodes {node_bytes}; at 120 Hz {one_120}); dense page {dense_page} strokes = {page_bytes} bytes; 30 s stroke = {long_bytes} bytes; strokes that fit the byte limit {fit}"
     );
-    let ok = note_documents::check_document(Family::Original, 1, &page(dense_page), &NOTE_LIMITS);
+    // The target of annotations#19: 30 dense pages in one note.
+    let thirty = page(30 * dense_page);
+    let thirty_bytes = serde_json::to_vec(&thirty).unwrap().len();
+    println!(
+        "30 dense pages: {thirty_bytes} bytes, {} strokes",
+        30 * dense_page
+    );
+    let ok = note_documents::check_document(Family::Original, 1, &thirty, &NOTE_LIMITS);
     assert!(ok.is_ok(), "{ok:?}");
+    assert!(thirty_bytes < NOTE_LIMITS.max_document_bytes);
+    assert!(30 * dense_page <= NOTE_LIMITS.max_items);
     assert!(page_bytes < NOTE_LIMITS.max_document_bytes);
     let long_doc = json!({"page":{"width":1000,"background":{"kind":"blank"}},"items":[long]});
     let ok = note_documents::check_document(Family::Original, 1, &long_doc, &NOTE_LIMITS);
     assert!(ok.is_ok(), "{ok:?}");
-    assert!(fit <= NOTE_LIMITS.max_items);
 }

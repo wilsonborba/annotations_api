@@ -1,5 +1,5 @@
 {
-  "description": "Sample column y is shorter than x",
+  "description": "Stroke samples data is not base64url",
   "family": "note-original",
   "schema_version": 1,
   "files": [
@@ -29,40 +29,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            10000,
-            10400,
-            10800,
-            11200,
-            11600
-          ],
-          "y": [
-            30000,
-            30300,
-            30000,
-            30300
-          ],
-          "t": [
-            0,
-            8,
-            16,
-            24,
-            32
-          ],
-          "pressure": [
-            500,
-            500,
-            500,
-            500,
-            500
-          ],
-          "tilt": [
-            600,
-            600,
-            600,
-            600,
-            600
-          ]
+          "count": 2,
+          "data": "not base64!"
         },
         "nodes": [
           {
@@ -93,7 +61,7 @@
   },
   "expect": {
     "valid": false,
-    "code": "invalid_count",
-    "path": "items[0].samples.y"
+    "code": "invalid_samples",
+    "path": "items[0].samples.data"
   }
 }

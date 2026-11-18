@@ -2,7 +2,15 @@
   "name": "content-job-draft",
   "version": 1,
   "fields": [
-    {"path": "format", "field_type": "string", "required": true},
-    {"path": "text", "field_type": "string", "required": true}
+    {
+      "path": "format",
+      "field_type": "string",
+      "required": true
+    },
+    {
+      "path": "text",
+      "field_type": "string",
+      "required": true
+    }
   ]
 }

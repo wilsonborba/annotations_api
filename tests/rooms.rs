@@ -182,7 +182,7 @@ async fn structured_overlap_rejects_but_free_shapes_overlap() {
     assert_eq!(room.document["items"].as_array().unwrap().len(), 3);
     let stroke = json!({"id":"ink-stroke","kind":"stroke","tool":"round","brush_version":1,
         "width":2,"color":"#000000FF","opacity":1,
-        "samples":{"x":[1000,2000],"y":[1000,2000],"t":[0,5]},
+        "samples":{"count":2,"data":"AQDQD9AP0A_QDwAK"},
         "nodes":[{"x":1000,"y":1000,"mode":"independent","corner":false,"sample":0}]});
     let room = rooms::add(
         &store,

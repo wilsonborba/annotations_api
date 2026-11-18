@@ -33,18 +33,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            1600,
-            14400
-          ],
-          "y": [
-            7200,
-            7200
-          ],
-          "t": [
-            0,
-            8
-          ]
+          "count": 2,
+          "data": "AQCAGYDIAcBwAAAQ"
         },
         "nodes": [
           {
@@ -80,18 +70,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            8000,
-            28000
-          ],
-          "y": [
-            4000,
-            4000
-          ],
-          "t": [
-            0,
-            8
-          ]
+          "count": 2,
+          "data": "AQCAfcC4AsA-AAAQ"
         },
         "nodes": [
           {

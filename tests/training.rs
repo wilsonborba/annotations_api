@@ -112,7 +112,7 @@ fn ink() -> Value {
         "page": {"width": 1000, "background": {"kind": "blank"}},
         "items": [{"id": "s1", "kind": "stroke", "tool": "round", "brush_version": 1,
             "width": 2, "color": "#000000FF", "opacity": 1,
-            "samples": {"x": [10, 20], "y": [10, 20], "t": [0, 5]},
+            "samples": {"count": 2,"data": "AQAUFBQUAAo"},
             "nodes": [{"x": 10, "y": 10, "mode": "independent", "corner": false, "sample": 0}]}]
     }})
 }

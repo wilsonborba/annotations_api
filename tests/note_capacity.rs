@@ -1,7 +1,10 @@
 //! Note capacity (annotations_api#19): a 30-page dense handwritten note.
 use annotations_api::{
     core::NOTE_LIMITS,
-    domain::note_documents::{self, Family},
+    domain::{
+        note_documents::{self, Family},
+        stroke_samples,
+    },
 };
 use serde_json::{Value, json};
 
@@ -26,7 +29,7 @@ fn stroke(i: usize) -> Value {
         .map(|&j| json!({"x":xs[j],"y":ys[j],"in":{"x":xs[j] - 150,"y":ys[j]},"out":{"x":xs[j] + 150,"y":ys[j]},"mode":"smooth","corner":false,"sample":j}))
         .collect();
     json!({"id":format!("s{i}"),"kind":"stroke","tool":"round","brush_version":1,"width":3,"color":"#000000FF","opacity":1,
-        "samples":{"x":xs,"y":ys,"t":ts,"pressure":ps,"tilt":tilts},"nodes":nodes})
+        "samples":stroke_samples::encode(&stroke_samples::Columns{x:xs,y:ys,t:ts.iter().map(|t|*t as i64).collect(),pressure:Some(ps),tilt:Some(tilts)}),"nodes":nodes})
 }
 
 fn peak_kb() -> u64 {
@@ -45,15 +48,16 @@ fn peak_kb() -> u64 {
 fn measure_a_30_page_note() {
     let pages = 30;
     let items: Vec<Value> = (0..pages * 800).map(stroke).collect();
-    let raw = serde_json::to_vec(&json!({"page":{"width":1000,"background":{"kind":"blank"}},"items":items})).unwrap();
+    let raw = serde_json::to_vec(
+        &json!({"page":{"width":1000,"background":{"kind":"blank"}},"items":items}),
+    )
+    .unwrap();
     drop(items);
     let before = peak_kb();
     let start = std::time::Instant::now();
     let doc: Value = serde_json::from_slice(&raw).unwrap();
     let parse = start.elapsed();
-    let mut limits = NOTE_LIMITS;
-    limits.max_items = 100_000;
-    limits.max_document_bytes = usize::MAX;
+    let limits = NOTE_LIMITS;
     let start = std::time::Instant::now();
     let checked = note_documents::check_document(Family::Original, 1, &doc, &limits);
     let check = start.elapsed();

@@ -29,9 +29,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [],
-          "y": [],
-          "t": []
+          "count": 0,
+          "data": "AQA"
         },
         "nodes": [
           {
@@ -63,6 +62,6 @@
   "expect": {
     "valid": false,
     "code": "empty_array",
-    "path": "items[0].samples.x"
+    "path": "items[0].samples.count"
   }
 }

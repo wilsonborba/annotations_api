@@ -33,18 +33,8 @@
         "color": "#000000FF",
         "opacity": 1,
         "samples": {
-          "x": [
-            800,
-            15200
-          ],
-          "y": [
-            8800,
-            8800
-          ],
-          "t": [
-            0,
-            8
-          ]
+          "count": 2,
+          "data": "AQDADIDhAcCJAQAAEA"
         },
         "nodes": [
           {
