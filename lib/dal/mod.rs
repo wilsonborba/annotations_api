@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod cortex;
 pub mod documents;
 pub mod execution;
 pub mod files;
@@ -12,7 +13,7 @@ use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012, 013, 018 and 019 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 20] = [
+pub const SQLITE_MIGRATIONS: [&str; 21] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -33,6 +34,7 @@ pub const SQLITE_MIGRATIONS: [&str; 20] = [
     include_str!("../../tests/sqlite/018_v2_file_previews.sql"),
     include_str!("../../tests/sqlite/019_v2_model_withdrawn.sql"),
     include_str!("../../migrations/020_v2_study_links.sql"),
+    include_str!("../../migrations/021_v2_content_jobs.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -43,6 +45,8 @@ pub struct Store {
     pub transfers: transfers::Transfers,
     pub files: files::Files,
     pub training_limits: training::FeedbackLimiter,
+    /// Optional Cortex API client. Disabled by default when CORTEX_URL is empty.
+    pub cortex: Arc<dyn cortex::CortexClient>,
     /// Cloud transcription execution. No server runtime exists yet.
     pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
@@ -73,8 +77,9 @@ impl Store {
             cache: cache::Cache::new(redis.clone()),
             rooms: rooms::Rooms::new(redis.clone()),
             transfers: transfers::Transfers::new(redis.clone()),
-            files: files::Files::new(settings, http.clone()),
+            files: files::Files::new(settings.clone(), http.clone()),
             training_limits: training::FeedbackLimiter::new(redis),
+            cortex: cortex::HttpCortex::client(settings.cortex_url, http.clone()),
             execution: execution::none(),
             http,
         })
@@ -101,6 +106,7 @@ impl Store {
             transfers: transfers::Transfers::fixture(),
             files: files::Files::fixture(),
             training_limits: training::FeedbackLimiter::fixture(),
+            cortex: Arc::new(cortex::DisabledCortex),
             execution: execution::none(),
             http: reqwest::Client::new(),
         }

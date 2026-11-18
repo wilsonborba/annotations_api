@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod cli;
+pub mod content_jobs;
 pub mod discovery;
 pub mod files;
 pub mod logs;
@@ -41,6 +42,7 @@ pub fn router(app: App) -> Router {
         .merge(media::routes())
         .merge(rooms::routes())
         .merge(transcriptions::routes())
+        .merge(content_jobs::routes())
         .merge(admin::routes())
         // Every `/admin` route, old and new, needs the administrator access level.
         .layer(axum::middleware::from_fn(admin::guard))

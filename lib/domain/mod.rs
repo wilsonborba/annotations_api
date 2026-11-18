@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod content_jobs;
 pub mod discovery;
 pub mod editor_rules;
 pub mod files;

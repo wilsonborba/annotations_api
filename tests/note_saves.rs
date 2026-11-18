@@ -138,6 +138,7 @@ fn couch_down() -> Documents {
             fsm_url: String::new(),
             fsm_key: String::new(),
             upload_staging_dir: String::new(),
+            cortex_url: String::new(),
             host: String::new(),
             port: 0,
             development: false,

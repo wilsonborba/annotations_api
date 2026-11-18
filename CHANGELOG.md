@@ -2,6 +2,7 @@
 
 ### 🚀 Features
 
+- *(content-jobs)* Add durable optional Cortex processing jobs with draft persistence and temporary chat cleanup (#35)
 - *(notes)* Link a handwritten study note to its published typed source post (#41)
 - *(logs)* Add journald logger and trusted LAN stream
 - *(storage)* Add v2 relational schema for notes, publication, sync, projects, tags and files (#18)
