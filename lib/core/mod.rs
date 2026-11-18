@@ -98,6 +98,46 @@ pub const DISCOVERY_LIMITS: DiscoveryLimits = DiscoveryLimits {
     max_term_chars: 100,
     max_terms: 20_000,
 };
+/// Limits of owner managed files (`/me/files`). Each purpose has its own byte limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileLimits {
+    /// Note attachments: images on paper, file cards and previews.
+    pub attachment_bytes: i64,
+    /// Transcription input files.
+    pub transcription_bytes: i64,
+    /// Content job input files (PDF, image, audio, video).
+    pub content_job_bytes: i64,
+    /// Characters in a file name.
+    pub max_filename_chars: usize,
+}
+/// Default file limits. Every value stays below the FSM default upload limit
+/// (`FSM_MAX_UPLOAD_BYTES`, 104,857,600 bytes). The attachment limit keeps the
+/// existing 50 MB image limit (`UPLOAD_BYTES`).
+pub const FILE_LIMITS: FileLimits = FileLimits {
+    attachment_bytes: UPLOAD_BYTES,
+    transcription_bytes: 20_000_000,
+    content_job_bytes: 100_000_000,
+    max_filename_chars: 255,
+};
+/// Bounds of the managed file cleanup task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileSettings {
+    /// An upload that holds `uploading` longer than this is treated as stopped.
+    pub grace_seconds: i64,
+    /// Queue rows and stopped uploads that one task run handles at most, each.
+    pub batch: i64,
+    /// FSM delete attempts for one item before it waits for an operator.
+    pub max_attempts: i64,
+    /// Wait before the next attempt after a failed FSM delete.
+    pub retry_seconds: i64,
+}
+/// Default cleanup bounds, the same as the note save task.
+pub const FILE_SETTINGS: FileSettings = FileSettings {
+    grace_seconds: 900,
+    batch: 100,
+    max_attempts: 5,
+    retry_seconds: 30,
+};
 #[derive(Clone)]
 pub struct Settings {
     pub database_url: String,
