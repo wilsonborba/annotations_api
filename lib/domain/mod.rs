@@ -9,6 +9,7 @@ pub mod names;
 pub mod note_documents;
 pub mod note_saves;
 pub mod notes;
+pub mod plane_tasks;
 pub mod posts;
 pub mod projects;
 pub mod publication;

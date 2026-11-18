@@ -7,6 +7,7 @@ pub mod logs;
 pub mod media;
 pub mod models;
 pub mod notes;
+pub mod plane_tasks;
 mod posts;
 pub mod projects;
 mod rooms;
@@ -43,6 +44,7 @@ pub fn router(app: App) -> Router {
         .merge(rooms::routes())
         .merge(transcriptions::routes())
         .merge(content_jobs::routes())
+        .merge(plane_tasks::routes())
         .merge(admin::routes())
         // Every `/admin` route, old and new, needs the administrator access level.
         .layer(axum::middleware::from_fn(admin::guard))

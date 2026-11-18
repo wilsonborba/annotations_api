@@ -242,6 +242,12 @@ pub struct Settings {
     pub upload_staging_dir: String,
     /// Optional Cortex API base URL. Empty leaves Cortex content jobs off.
     pub cortex_url: String,
+    /// Optional Plane Slim LAN base URL. Empty disables task card routes.
+    pub plane_url: String,
+    /// Server-held Plane Slim API key. Never exposed to clients or logs.
+    pub plane_api_key: String,
+    /// Plane Slim workspace slug.
+    pub plane_workspace: String,
     pub host: String,
     pub port: u16,
     pub development: bool,
@@ -265,6 +271,9 @@ impl Settings {
             fsm_key: env("FSM_API_KEY", ""),
             upload_staging_dir: env("UPLOAD_STAGING_DIR", ""),
             cortex_url: env("CORTEX_URL", ""),
+            plane_url: env("PLANE_URL", ""),
+            plane_api_key: env("PLANE_API_KEY", ""),
+            plane_workspace: env("PLANE_WORKSPACE", "asodya"),
             host: env("HOST", "127.0.0.1"),
             port: env("PORT", "8111").parse().unwrap_or(8111),
             development: env("DEVELOPMENT_MODE", "false").parse().unwrap_or(false),
