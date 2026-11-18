@@ -2,6 +2,7 @@
 
 ### 🚀 Features
 
+- *(gateway)* Add v2 route access-class verification test and open gateway cutover issue (#38)
 - *(tasks)* Add owner task card routes backed by per-user private Plane Slim containers (#36)
 - *(content-jobs)* Add durable optional Cortex processing jobs with draft persistence and temporary chat cleanup (#35)
 - *(notes)* Link a handwritten study note to its published typed source post (#41)
