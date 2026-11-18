@@ -27,7 +27,7 @@ pub fn routes() -> Router<App> {
 }
 
 /// The expected project revision from `If-Match` (`"3"` or `3`).
-fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
+pub(crate) fn if_match(headers: &HeaderMap) -> Result<i64, NoteError> {
     if_match_from(headers, 1).map_err(|e| match e.code.as_str() {
         "if_match_required" => NoteError::new(
             StatusCode::PRECONDITION_REQUIRED,

@@ -35,7 +35,9 @@ TIER = {
 
 
 def request(base, method, route, data=None):
-    headers = {'Content-Type': 'application/json'}
+    # The backend checks the administrator access level on /admin routes. On the
+    # LAN listener the caller sends it; the gateway replaces it with its own value.
+    headers = {'Content-Type': 'application/json', 'X-Access-Level': '1'}
     if os.environ.get('ANNOTATIONS_ADMIN_KEY'):
         headers['Authorization'] = os.environ['ANNOTATIONS_ADMIN_KEY']
     req = urllib.request.Request(base.rstrip('/') + route, data=None if data is None else json.dumps(data).encode(), headers=headers, method=method)

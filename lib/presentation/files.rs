@@ -18,11 +18,16 @@ use axum::{
     routing::{get, post},
 };
 
-pub fn routes() -> Router<App> {
-    let largest = FILE_LIMITS
+/// The body limit of an upload: the largest purpose limit.
+pub(crate) fn upload_limit() -> usize {
+    FILE_LIMITS
         .attachment_bytes
         .max(FILE_LIMITS.transcription_bytes)
-        .max(FILE_LIMITS.content_job_bytes) as usize;
+        .max(FILE_LIMITS.content_job_bytes) as usize
+}
+
+pub fn routes() -> Router<App> {
+    let largest = upload_limit();
     Router::new()
         .route("/me/files", post(reserve))
         .route("/me/files/{file_id}", get(detail).delete(release))
