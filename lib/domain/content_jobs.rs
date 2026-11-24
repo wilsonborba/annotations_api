@@ -432,12 +432,12 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
         return Ok(());
     }
 
-    let (session_id, output_id) = match store
+    let started = match store
         .cortex
         .start_chat(owner, &prompt_text, cortex_file_ids)
         .await
     {
-        Ok(ids) => ids,
+        Ok(s) => s,
         Err(_) => {
             return fail_job(store, job_id, "cortex_unavailable", "Cortex start failed").await;
         }
@@ -445,15 +445,26 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
     sqlx::query(
         "UPDATE content_jobs SET status='running',cortex_session_id=$1,cortex_output_id=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','uploading')",
     )
-    .bind(&session_id)
-    .bind(&output_id)
+    .bind(&started.session_id)
+    .bind(&started.output_id)
     .bind(core::now())
     .bind(job_id)
     .execute(&store.db)
     .await?;
     append_event(store, job_id, "running").await?;
 
-    poll_and_finish(store, owner, job_id, &session_id, &output_id).await
+    if let Some(immediate) = started.immediate_output {
+        finish_job_with_output(store, owner, job_id, &started.session_id, immediate).await
+    } else {
+        poll_and_finish(
+            store,
+            owner,
+            job_id,
+            &started.session_id,
+            &started.output_id,
+        )
+        .await
+    }
 }
 
 /// Poll an already-started Cortex output until terminal, save the draft to CouchDB
@@ -492,6 +503,16 @@ async fn poll_and_finish(
         return fail_job(store, job_id, "cortex_timeout", "Cortex job timed out").await;
     };
 
+    finish_job_with_output(store, owner, job_id, session_id, out).await
+}
+
+async fn finish_job_with_output(
+    store: &Store,
+    owner: &str,
+    job_id: &str,
+    session_id: &str,
+    out: crate::dal::cortex::CortexOutput,
+) -> R<()> {
     let (next_status, err_code, err_msg) = match out.status {
         OutputStatus::Completed => ("completed", None, None),
         OutputStatus::Partial => ("partial", out.error_code, out.error_message),
