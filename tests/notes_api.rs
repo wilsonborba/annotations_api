@@ -1234,6 +1234,26 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
     );
     assert_eq!(captured.lock().unwrap().len(), 1);
 
+    let bad_pages_cap = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Over 100 Pages",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-101"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_pages_cap.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_pages_cap.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
     // Stale expected_revision fails closed with 409 and zero downstream calls.
     let stale_rev = call(
         &router,
@@ -1305,6 +1325,15 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
     );
     let mixed_note_id = create_both.body["note_id"].as_str().unwrap().to_string();
     let updated_rev = create_both.body["revision"].as_i64().unwrap();
+    let typed_rev_id = create_both.body["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["representation"] == "typed")
+        .unwrap()["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let files_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
         .bind(A)
@@ -1312,7 +1341,7 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
         .await
         .unwrap();
 
-    // Handoff mixing note_original, note_typed, and file materializes note text into FSM once.
+    // Handoff mixing note_original, note_typed (explicit revision_id), and file materializes note text into FSM once.
     let mixed = call(
         &router,
         "POST",
@@ -1321,16 +1350,31 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
         &[],
         Some(json!({
             "title": "Mixed Study",
+            "description": "Chosen settings",
             "expected_revision": updated_rev,
             "sources": [
                 {"kind": "note_original"},
-                {"kind": "note_typed", "selection_kind": "passages", "selection_spec": "p1:0-10"},
+                {"kind": "note_typed", "revision_id": typed_rev_id, "selection_kind": "passages", "selection_spec": "p1:0-10"},
                 {"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-3"}
             ]
         })),
     )
     .await;
     assert_eq!(mixed.status, StatusCode::CREATED, "{:?}", mixed.body);
+    {
+        let calls = captured.lock().unwrap();
+        let payload = &calls.last().unwrap().2;
+        assert_eq!(payload["title"], "Mixed Study");
+        assert_eq!(payload["description"], "Chosen settings");
+        assert_eq!(payload["sources"][0]["mime_type"], "text/plain");
+        assert_eq!(payload["sources"][0]["selection_kind"], "all");
+        assert_eq!(payload["sources"][1]["mime_type"], "text/plain");
+        assert_eq!(payload["sources"][1]["selection_kind"], "passages");
+        assert_eq!(payload["sources"][1]["selection_spec"], "p1:0-10");
+        assert_eq!(payload["sources"][2]["fsm_ref"], "annotations/a/slides.pdf");
+        assert_eq!(payload["sources"][2]["selection_kind"], "pages");
+        assert_eq!(payload["sources"][2]["selection_spec"], "1-3");
+    }
     let files_after_first: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
         .bind(A)
         .fetch_one(&store.db)

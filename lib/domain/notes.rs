@@ -1316,30 +1316,38 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
     }
 }
 
+fn collect_original_text(items: &[Value], out: &mut String) {
+    for item in items {
+        match item.get("kind").and_then(Value::as_str) {
+            Some("text") => {
+                let Some(spans) = item.get("spans").and_then(Value::as_array) else {
+                    continue;
+                };
+                let mut line = String::new();
+                for span in spans {
+                    if let Some(text) = span.get("text").and_then(Value::as_str) {
+                        line.push_str(text);
+                    }
+                }
+                if !line.trim().is_empty() {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+            }
+            Some("group") => {
+                if let Some(children) = item.get("items").and_then(Value::as_array) {
+                    collect_original_text(children, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn original_text(document: &Value) -> String {
     let mut out = String::new();
-    for item in document
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if item.get("kind").and_then(Value::as_str) != Some("text") {
-            continue;
-        }
-        let Some(spans) = item.get("spans").and_then(Value::as_array) else {
-            continue;
-        };
-        let mut line = String::new();
-        for span in spans {
-            if let Some(text) = span.get("text").and_then(Value::as_str) {
-                line.push_str(text);
-            }
-        }
-        if !line.trim().is_empty() {
-            out.push_str(&line);
-            out.push('\n');
-        }
+    if let Some(items) = document.get("items").and_then(Value::as_array) {
+        collect_original_text(items, &mut out);
     }
     out
 }
