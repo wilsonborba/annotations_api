@@ -1108,6 +1108,19 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
         .await;
         assert_eq!(r.status, StatusCode::CREATED, "{title}: {:?}", r.body);
         assert_eq!(r.body["relation_kind"], "created_for_note");
+        assert_eq!(r.body["item"]["project"], "notes-proj");
+        assert!(
+            !r.body["item"]["report_slug"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
+        assert!(
+            !r.body["item"]["dataset_id"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
         created_ids.push(r.body["report_item_id"].as_str().unwrap().to_string());
     }
     let rep_ok = created_ids[0].clone();
@@ -1338,7 +1351,7 @@ async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
     let fake = Router::new()
         .route(
             "/me/projects/{project}/items",
-            post(move |headers: HeaderMap, Path(_project): Path<String>| {
+            post(move |headers: HeaderMap, Path(project): Path<String>| {
                 let items = items_post.clone();
                 async move {
                     let owner = headers
@@ -1349,11 +1362,37 @@ async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
                         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauth"})));
                     }
                     let id = "http-rep-1".to_string();
+                    let replay = headers
+                        .get("idempotency-key")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|k| k == "idem-replay");
                     items
                         .lock()
                         .unwrap()
                         .insert(id.clone(), (owner.to_string(), true));
-                    (StatusCode::CREATED, Json(json!({"item": {"id": id}})))
+                    let status = if replay {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::CREATED
+                    };
+                    (
+                        status,
+                        Json(json!({
+                            "item": {
+                                "id": id,
+                                "project": project,
+                                "report_slug": "owner-http-1",
+                                "dataset_id": "ds-http-1",
+                                "source_app": "annotations",
+                                "template_id": "bar",
+                                "template_version": 1,
+                                "audience": "personal",
+                                "control_authority": "owner",
+                                "etag": "\"e1\"",
+                                "embed_url": "/v1/embed/p1/owner-http-1"
+                            }
+                        })),
+                    )
                 }
             }),
         )
@@ -1411,22 +1450,34 @@ async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
 
     let client = HttpReports::client(format!("http://{addr}"), reqwest::Client::new());
     let created = client
-        .create_owned_item(A, "p1", json!({"title": "Item"}))
+        .create_owned_item(A, "p1", "idem-1", json!({"title": "Item"}))
         .await
         .unwrap();
-    assert_eq!(created, "http-rep-1");
+    assert_eq!(created.id, "http-rep-1");
+    assert_eq!(created.report_slug, "owner-http-1");
+    assert_eq!(created.dataset_id, "ds-http-1");
+
+    // 200 OK idempotent replay is accepted with full metadata.
+    let replayed = client
+        .create_owned_item(A, "p1", "idem-replay", json!({"title": "Item"}))
+        .await
+        .unwrap();
+    assert_eq!(replayed.id, "http-rep-1");
 
     // Wrong x-uuid is rejected with 403.
-    let wrong_owner = client.verify_owned_item(B, &created).await.unwrap_err();
+    let wrong_owner = client.verify_owned_item(B, &created.id).await.unwrap_err();
     assert_eq!(wrong_owner.0, StatusCode::FORBIDDEN);
 
     // Unconfirmed delete on reused item does NOT append ?confirm=true -> gets 409 CONFLICT.
     let no_confirm = client
-        .delete_owned_item(A, &created, false)
+        .delete_owned_item(A, &created.id, false)
         .await
         .unwrap_err();
     assert_eq!(no_confirm.0, StatusCode::CONFLICT);
 
     // Confirmed delete appends ?confirm=true -> succeeds with 200 OK.
-    client.delete_owned_item(A, &created, true).await.unwrap();
+    client
+        .delete_owned_item(A, &created.id, true)
+        .await
+        .unwrap();
 }

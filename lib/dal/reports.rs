@@ -2,6 +2,7 @@
 //! item creation provenance, and scoped deletion (#37).
 use crate::core::{Error, Result};
 use axum::http::StatusCode;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -12,15 +13,33 @@ use std::{
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-const MAX_REPORTS_RESPONSE_BYTES: usize = 256 * 1024;
+/// Bounded above Reports' 1 MiB upload payload + metadata wrapper so valid 201/200
+/// owner-item detail replies are never rejected after remote creation.
+const MAX_REPORTS_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreatedReportMetadata {
+    pub id: String,
+    pub project: String,
+    pub report_slug: String,
+    pub dataset_id: String,
+    pub source_app: String,
+    pub template_id: String,
+    pub template_version: i64,
+    pub audience: String,
+    pub control_authority: String,
+    pub etag: String,
+    pub embed_url: String,
+}
 
 pub trait ReportsClient: Send + Sync {
     fn create_owned_item<'a>(
         &'a self,
         owner: &'a str,
         project: &'a str,
+        idempotency_key: &'a str,
         payload: Value,
-    ) -> BoxFuture<'a, Result<String>>;
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>>;
     fn verify_owned_item<'a>(
         &'a self,
         owner: &'a str,
@@ -41,8 +60,9 @@ impl ReportsClient for DisabledReports {
         &'a self,
         _owner: &'a str,
         _project: &'a str,
+        _idempotency_key: &'a str,
         _payload: Value,
-    ) -> BoxFuture<'a, Result<String>> {
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
         Box::pin(async { Err(Error::unavailable()) })
     }
 
@@ -98,13 +118,46 @@ async fn read_bounded_body(mut resp: reqwest::Response, limit: usize) -> Result<
     Ok(buf)
 }
 
+fn parse_created_metadata(parsed: &Value, fallback_project: &str) -> Result<CreatedReportMetadata> {
+    let item = parsed.get("item").unwrap_or(parsed);
+    let str_field = |k: &str, default: &str| -> String {
+        item.get(k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default)
+            .to_string()
+    };
+    let id = str_field("id", "");
+    if id.is_empty() {
+        return Err(Error::unavailable());
+    }
+    Ok(CreatedReportMetadata {
+        id,
+        project: str_field("project", fallback_project),
+        report_slug: str_field("report_slug", ""),
+        dataset_id: str_field("dataset_id", ""),
+        source_app: str_field("source_app", "annotations"),
+        template_id: str_field("template_id", ""),
+        template_version: item
+            .get("template_version")
+            .and_then(Value::as_i64)
+            .unwrap_or(1),
+        audience: str_field("audience", "personal"),
+        control_authority: str_field("control_authority", "owner"),
+        etag: str_field("etag", ""),
+        embed_url: str_field("embed_url", ""),
+    })
+}
+
 impl ReportsClient for HttpReports {
     fn create_owned_item<'a>(
         &'a self,
         owner: &'a str,
         project: &'a str,
+        idempotency_key: &'a str,
         payload: Value,
-    ) -> BoxFuture<'a, Result<String>> {
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
         Box::pin(async move {
             let clean_project = project.trim();
             if clean_project.is_empty()
@@ -116,10 +169,11 @@ impl ReportsClient for HttpReports {
                 return Err(Error::bad("invalid_project"));
             }
             let url = format!("{}/me/projects/{}/items", self.base_url, clean_project);
-            let resp = self
-                .http
-                .post(url)
-                .header("x-uuid", owner)
+            let mut req = self.http.post(url).header("x-uuid", owner);
+            if !idempotency_key.trim().is_empty() {
+                req = req.header("idempotency-key", idempotency_key.trim());
+            }
+            let resp = req
                 .json(&payload)
                 .send()
                 .await
@@ -127,20 +181,14 @@ impl ReportsClient for HttpReports {
             let status = resp.status();
             let body = read_bounded_body(resp, MAX_REPORTS_RESPONSE_BYTES).await?;
             match status {
-                StatusCode::CREATED => {
+                StatusCode::CREATED | StatusCode::OK => {
                     let parsed: Value =
                         serde_json::from_slice(&body).map_err(|_| Error::unavailable())?;
-                    let item_id = parsed
-                        .get("item")
-                        .and_then(|v| v.get("id"))
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .ok_or_else(Error::unavailable)?;
-                    Ok(item_id.to_string())
+                    parse_created_metadata(&parsed, clean_project)
                 }
                 StatusCode::FORBIDDEN => Err(Error(StatusCode::FORBIDDEN, "forbidden".into())),
                 StatusCode::NOT_FOUND => Err(Error::missing()),
+                StatusCode::CONFLICT => Err(Error::conflict("report_item_conflict")),
                 StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
                     Err(Error::bad("invalid_report_item"))
                 }
@@ -208,6 +256,7 @@ impl ReportsClient for HttpReports {
 #[derive(Default)]
 pub struct MockReports {
     items: Mutex<HashMap<String, String>>,
+    idempotency: Mutex<HashMap<(String, String), CreatedReportMetadata>>,
     deleted_calls: Mutex<Vec<(String, String, bool)>>,
     failing_deletes: Mutex<HashSet<String>>,
     next_id: Mutex<u64>,
@@ -243,10 +292,17 @@ impl ReportsClient for MockReports {
     fn create_owned_item<'a>(
         &'a self,
         owner: &'a str,
-        _project: &'a str,
-        _payload: Value,
-    ) -> BoxFuture<'a, Result<String>> {
+        project: &'a str,
+        idempotency_key: &'a str,
+        payload: Value,
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
         Box::pin(async move {
+            let key = (owner.to_string(), idempotency_key.to_string());
+            if !idempotency_key.is_empty()
+                && let Some(existing) = self.idempotency.lock().unwrap().get(&key).cloned()
+            {
+                return Ok(existing);
+            }
             let mut n = self.next_id.lock().unwrap();
             *n += 1;
             let item_id = format!("rep-created-{}", *n);
@@ -254,7 +310,30 @@ impl ReportsClient for MockReports {
                 .lock()
                 .unwrap()
                 .insert(item_id.clone(), owner.to_string());
-            Ok(item_id)
+            let meta = CreatedReportMetadata {
+                id: item_id.clone(),
+                project: project.to_string(),
+                report_slug: format!("owner-{}", *n),
+                dataset_id: format!("ds-{}", *n),
+                source_app: "annotations".into(),
+                template_id: payload
+                    .get("template_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("bar")
+                    .to_string(),
+                template_version: payload
+                    .get("template_version")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(1),
+                audience: "personal".into(),
+                control_authority: "owner".into(),
+                etag: format!("\"etag-{}\"", *n),
+                embed_url: format!("/v1/embed/{project}/owner-{}", *n),
+            };
+            if !idempotency_key.is_empty() {
+                self.idempotency.lock().unwrap().insert(key, meta.clone());
+            }
+            Ok(meta)
         })
     }
 

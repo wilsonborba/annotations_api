@@ -968,6 +968,7 @@ pub struct RegisterReportReferenceInput {
     pub mode: Option<String>,
     pub project: Option<String>,
     pub item: Option<Value>,
+    pub operation_key: Option<String>,
     pub report_item_id: Option<String>,
     pub relation_kind: Option<String>,
 }
@@ -1066,21 +1067,43 @@ pub async fn register_report_reference(
         let item_payload = input.item.ok_or_else(|| {
             NoteError::invalid("invalid_report_item", "item payload is required for create")
         })?;
-        let created_item_id = store
-            .reports
-            .create_owned_item(owner, project, item_payload)
-            .await
-            .map_err(|e| map_reports_err(e, "Reports service could not create item"))?;
-
+        let op_key = input
+            .operation_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && s.len() <= 128)
+            .map(str::to_string)
+            .unwrap_or_else(core::id);
+        let server_idem_key = format!("notes:{note_id}:{op_key}");
         let now = core::now();
-        let mut tx = store.db.begin().await?;
-        let res = sqlx::query(
-            "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at)
-             VALUES($1,$2,$3,'created_for_note',$4,$4)",
+        sqlx::query(
+            "INSERT INTO note_report_create_receipts(note_id,owner_id,operation_key,idempotency_key,report_item_id,status,updated_at)
+             VALUES($1,$2,$3,$4,'','pending',$5)
+             ON CONFLICT(note_id,owner_id,operation_key) DO NOTHING",
         )
         .bind(note_id)
         .bind(owner)
-        .bind(&created_item_id)
+        .bind(&op_key)
+        .bind(&server_idem_key)
+        .bind(now)
+        .execute(&store.db)
+        .await?;
+
+        let meta = store
+            .reports
+            .create_owned_item(owner, project, &server_idem_key, item_payload)
+            .await
+            .map_err(|e| map_reports_err(e, "Reports service could not create item"))?;
+
+        let mut tx = store.db.begin().await?;
+        let res = sqlx::query(
+            "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at)
+             VALUES($1,$2,$3,'created_for_note',$4,$4)
+             ON CONFLICT(note_id,report_item_id) DO UPDATE SET updated_at = excluded.updated_at",
+        )
+        .bind(note_id)
+        .bind(owner)
+        .bind(&meta.id)
         .bind(now)
         .execute(&mut *tx)
         .await;
@@ -1093,11 +1116,24 @@ pub async fn register_report_reference(
             }
             return Err(err.into());
         }
+        sqlx::query(
+            "UPDATE note_report_create_receipts SET report_item_id=$1, status='recorded', updated_at=$2
+             WHERE note_id=$3 AND owner_id=$4 AND operation_key=$5",
+        )
+        .bind(&meta.id)
+        .bind(now)
+        .bind(note_id)
+        .bind(owner)
+        .bind(&op_key)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         return Ok(json!({
             "note_id": note_id,
-            "report_item_id": created_item_id,
+            "report_item_id": meta.id,
             "relation_kind": "created_for_note",
+            "operation_key": op_key,
+            "item": meta,
         }));
     }
 

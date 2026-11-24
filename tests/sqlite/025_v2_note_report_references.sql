@@ -8,6 +8,17 @@ CREATE TABLE IF NOT EXISTS note_report_references (
     PRIMARY KEY (note_id, report_item_id)
 );
 
+CREATE TABLE IF NOT EXISTS note_report_create_receipts (
+    note_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    operation_key TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    report_item_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('pending', 'recorded')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, owner_id, operation_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_note_report_refs_item
     ON note_report_references (report_item_id, relation_kind);
 
@@ -25,4 +36,15 @@ CREATE TABLE IF NOT EXISTS note_report_cleanup (
     last_error TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (note_id, report_item_id)
+);
+
+CREATE TABLE IF NOT EXISTS note_report_create_receipts (
+    note_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    operation_key TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    report_item_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('pending', 'recorded')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, owner_id, operation_key)
 );
