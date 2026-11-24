@@ -616,17 +616,17 @@ async fn delete_removes_the_working_copy_and_keeps_a_shared_file() {
     assert_eq!(document_count(&store), 3);
 
     let uri = format!("/me/notes/{gone}");
-    let reports = call(
+    let invalid_cascade = call(
         &router,
         "DELETE",
-        &format!("{uri}?delete_owned_reports=true"),
+        &format!("{uri}?delete_owned_reports=maybe"),
         Some(A),
         &[("if-match", "1")],
         None,
     )
     .await;
-    assert_eq!(reports.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(reports.body["code"], "reports_cascade_unavailable");
+    assert_eq!(invalid_cascade.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid_cascade.body["code"], "invalid_delete_owned_reports");
     let missing = call(&router, "DELETE", &uri, Some(A), &[], None).await;
     assert_eq!(missing.status, StatusCode::PRECONDITION_REQUIRED);
     assert_eq!(missing.body["code"], "if_match_required");
@@ -1037,4 +1037,178 @@ async fn request_bodies_are_checked_before_any_write() {
         0
     );
     assert_eq!(document_count(&store), 0);
+}
+
+#[tokio::test]
+async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
+    let (mut store, _) = setup().await;
+    let mock_reports = annotations_api::dal::reports::MockReports::new();
+    mock_reports.insert_item("rep-created-ok", A);
+    mock_reports.insert_item("rep-created-fail", A);
+    mock_reports.insert_item("rep-linked-preexisting", A);
+    mock_reports.insert_item("rep-other-owner", B);
+    mock_reports.set_delete_failure("rep-created-fail", true);
+    store.reports = mock_reports.clone();
+
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "cascade-n1",
+            "metadata": {"title": "Note One"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note One")}}
+        }),
+    )
+    .await;
+    assert_eq!(n1.status, StatusCode::CREATED, "{}", n1.body);
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+
+    let n2 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "cascade-n2",
+            "metadata": {"title": "Note Two"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note Two")}}
+        }),
+    )
+    .await;
+    assert_eq!(n2.status, StatusCode::CREATED);
+    let n2_id = n2.body["note_id"].as_str().unwrap().to_string();
+
+    // Register authoritative created_for_note items on n1, plus a linked pre-existing item.
+    for (item, kind) in [
+        ("rep-created-ok", "created_for_note"),
+        ("rep-created-fail", "created_for_note"),
+        ("rep-linked-preexisting", "linked"),
+    ] {
+        let r = call(
+            &router,
+            "POST",
+            &format!("/me/notes/{n1_id}/reports"),
+            Some(A),
+            &[],
+            Some(json!({"report_item_id": item, "relation_kind": kind})),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::CREATED, "{item}: {:?}", r.body);
+    }
+
+    // Reject guessed UUID or another user's Reports item as created_for_note!
+    let guessed = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": "nonexistent-uuid", "relation_kind": "created_for_note"})),
+    )
+    .await;
+    assert_eq!(guessed.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let stolen = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": "rep-other-owner", "relation_kind": "created_for_note"})),
+    )
+    .await;
+    assert_eq!(stolen.status, StatusCode::FORBIDDEN);
+
+    // Note 2 links rep-created-ok (cannot claim created_for_note for another note's item).
+    let steal_creation = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": "rep-created-ok", "relation_kind": "created_for_note"})),
+    )
+    .await;
+    assert_eq!(steal_creation.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let link_n2 = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": "rep-created-ok", "relation_kind": "linked"})),
+    )
+    .await;
+    assert_eq!(link_n2.status, StatusCode::CREATED);
+
+    // Pre-delete preview on n1 warns that rep-created-ok is reused by n2.
+    let preview = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{n1_id}/reports/delete-preview"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(preview.status, StatusCode::OK);
+    let created_items = preview.body["created_items"].as_array().unwrap();
+    let ok_entry = created_items
+        .iter()
+        .find(|e| e["report_item_id"] == "rep-created-ok")
+        .unwrap();
+    assert_eq!(ok_entry["reused_by_note_ids"], json!([n2_id]));
+    assert_eq!(
+        preview.body["linked_items"],
+        json!(["rep-linked-preexisting"])
+    );
+
+    // Delete n1 with delete_owned_reports=true:
+    // - rep-created-ok deleted
+    // - rep-created-fail recorded in failed_report_deletions
+    // - rep-linked-preexisting NEVER sent to MockReports::delete_owned_item
+    let del = call(
+        &router,
+        "DELETE",
+        &format!("/me/notes/{n1_id}?delete_owned_reports=true"),
+        Some(A),
+        &[("if-match", "1")],
+        None,
+    )
+    .await;
+    assert_eq!(del.status, StatusCode::OK, "{:?}", del.body);
+    assert_eq!(del.body["note_deleted"], true);
+    assert_eq!(del.body["deleted_report_ids"], json!(["rep-created-ok"]));
+    assert_eq!(del.body["skipped_linked_count"], 1);
+    assert_eq!(
+        del.body["failed_report_deletions"][0]["report_item_id"],
+        "rep-created-fail"
+    );
+    assert!(
+        !mock_reports
+            .delete_calls()
+            .iter()
+            .any(|(_, id)| id == "rep-linked-preexisting" || id == "rep-other-owner")
+    );
+
+    // Retry cleanup after Reports recovers -> deletes rep-created-fail cleanly without re-deleting rep-created-ok.
+    mock_reports.set_delete_failure("rep-created-fail", false);
+    let retry = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports/retry-cleanup"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(retry.status, StatusCode::OK);
+    assert_eq!(
+        retry.body["deleted_report_ids"],
+        json!(["rep-created-fail"])
+    );
+    assert_eq!(retry.body["failed_report_deletions"], json!([]));
 }
