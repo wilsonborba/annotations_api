@@ -1540,3 +1540,118 @@ async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn create_report_handles_lost_response_concurrent_duplicates_and_digest_conflict() {
+    let (mut store, _) = setup().await;
+    let mock_reports = annotations_api::dal::reports::MockReports::new();
+    store.reports = mock_reports.clone();
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "fault-retry-n1",
+            "metadata": {"title": "Fault Retry Note"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Body")}}
+        }),
+    )
+    .await;
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+
+    // 1. Reports creates the item but the response is lost (503).
+    mock_reports.set_drop_next_create_response(true);
+    let lost = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "First Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(lost.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(mock_reports.create_calls_count(), 1);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM note_report_references WHERE note_id IS NOT NULL"
+        )
+        .await,
+        0
+    );
+
+    // 2. Retrying the same operation_key with a changed digest fails with 409 BEFORE calling Reports.
+    let conflict = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "Different Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT);
+    assert_eq!(conflict.body["code"], "operation_key_conflict");
+    assert_eq!(mock_reports.create_calls_count(), 1);
+
+    // 3. Retrying with the same request replays the already-created item via the server-minted receipt.
+    let replay = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "First Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CREATED, "{:?}", replay.body);
+    assert_eq!(replay.body["report_item_id"], "rep-created-1");
+    assert_eq!(mock_reports.create_calls_count(), 2);
+
+    // 4. Concurrent duplicate requests with the same operation_key create only one report item.
+    let conc_body = json!({
+        "mode": "create",
+        "operation_key": "op-conc-1",
+        "project": "proj-a",
+        "item": {"title": "Concurrent Item", "template_id": "bar", "template_version": 1}
+    });
+    let reports_uri = format!("/me/notes/{n1_id}/reports");
+    let (c1, c2) = tokio::join!(
+        call(
+            &router,
+            "POST",
+            &reports_uri,
+            Some(A),
+            &[],
+            Some(conc_body.clone()),
+        ),
+        call(&router, "POST", &reports_uri, Some(A), &[], Some(conc_body))
+    );
+    assert_eq!(c1.status, StatusCode::CREATED, "{:?}", c1.body);
+    assert_eq!(c2.status, StatusCode::CREATED, "{:?}", c2.body);
+    assert_eq!(c1.body["report_item_id"], "rep-created-2");
+    assert_eq!(c2.body["report_item_id"], "rep-created-2");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM note_report_references").await,
+        2
+    );
+}

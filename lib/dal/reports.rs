@@ -259,6 +259,8 @@ pub struct MockReports {
     idempotency: Mutex<HashMap<(String, String), CreatedReportMetadata>>,
     deleted_calls: Mutex<Vec<(String, String, bool)>>,
     failing_deletes: Mutex<HashSet<String>>,
+    drop_next_create_response: Mutex<bool>,
+    create_calls: Mutex<usize>,
     next_id: Mutex<u64>,
 }
 
@@ -283,6 +285,14 @@ impl MockReports {
         }
     }
 
+    pub fn set_drop_next_create_response(&self, drop: bool) {
+        *self.drop_next_create_response.lock().unwrap() = drop;
+    }
+
+    pub fn create_calls_count(&self) -> usize {
+        *self.create_calls.lock().unwrap()
+    }
+
     pub fn delete_calls(&self) -> Vec<(String, String, bool)> {
         self.deleted_calls.lock().unwrap().clone()
     }
@@ -297,10 +307,16 @@ impl ReportsClient for MockReports {
         payload: Value,
     ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
         Box::pin(async move {
+            *self.create_calls.lock().unwrap() += 1;
             let key = (owner.to_string(), idempotency_key.to_string());
             if !idempotency_key.is_empty()
                 && let Some(existing) = self.idempotency.lock().unwrap().get(&key).cloned()
             {
+                let mut drop = self.drop_next_create_response.lock().unwrap();
+                if *drop {
+                    *drop = false;
+                    return Err(Error::unavailable());
+                }
                 return Ok(existing);
             }
             let mut n = self.next_id.lock().unwrap();
@@ -332,6 +348,11 @@ impl ReportsClient for MockReports {
             };
             if !idempotency_key.is_empty() {
                 self.idempotency.lock().unwrap().insert(key, meta.clone());
+            }
+            let mut drop = self.drop_next_create_response.lock().unwrap();
+            if *drop {
+                *drop = false;
+                return Err(Error::unavailable());
             }
             Ok(meta)
         })
