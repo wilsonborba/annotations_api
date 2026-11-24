@@ -181,6 +181,34 @@ async fn create_twice_with_the_same_client_id_gives_one_note() {
 }
 
 #[tokio::test]
+async fn reports_references_round_trip_for_link_and_uploaded_snapshots() {
+    let (_store, router) = setup().await;
+    let document = json!({
+        "page": {"width": 1000, "background": {"kind": "blank"}},
+        "items": [
+            {"id":"link-live", "kind":"reports_embed", "x":0, "y":0, "width":400, "height":304,
+             "report_id":"report-42", "project_slug":"project-1", "report_slug":"report-42", "dataset_id":"dataset-1",
+             "mode":"live", "source":"link"},
+            {"id":"upload-snapshot", "kind":"reports_embed", "x":496, "y":0, "width":400, "height":304,
+             "report_id":"00000000-0000-4000-8000-000000000001", "project_slug":"project-1", "report_slug":"report-42", "dataset_id":"dataset-1",
+             "mode":"snapshot", "source":"upload", "snapshot_id":"snapshot-42", "captured_at":1794700000}
+        ]
+    });
+    let note_id = create_original(&router, A, "reports-round-trip", document.clone()).await;
+    let read = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{note_id}"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(read.status, StatusCode::OK, "{}", read.body);
+    assert_eq!(read.body["representations"][0]["document"], document);
+}
+
+#[tokio::test]
 async fn typed_only_create_works_without_an_original_and_binds_the_account() {
     let (store, router) = setup().await;
     assert_eq!(count(&store, "SELECT COUNT(*) FROM owners").await, 0);

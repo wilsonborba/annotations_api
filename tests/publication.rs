@@ -530,10 +530,14 @@ fn embeds_original() -> Value {
             {"id": "t1", "kind": "text", "x": 0, "y": 0, "width": 304, "height": 50,
              "spans": [{"text": "Public lesson"}]},
             {"id": "r1", "kind": "reports_embed", "x": 0, "y": 104, "width": 400, "height": 304,
-             "report_id": "rep-private-1", "mode": "snapshot", "source": "upload",
+             "report_id": "00000000-0000-4000-8000-000000000001",
+             "project_slug": "annotations", "report_slug": "chart-1", "dataset_id": "monthly-sales",
+             "mode": "snapshot", "source": "upload",
              "snapshot_id": "snap-private-9", "captured_at": 1_700_000_123},
             {"id": "r2", "kind": "reports_embed", "x": 496, "y": 104, "width": 400, "height": 304,
-             "report_id": "rep-live-2", "mode": "live", "source": "link"},
+             "report_id": "public-report", "project_slug": "annotations",
+             "report_slug": "public-report", "dataset_id": "summary-card",
+             "mode": "live", "source": "link"},
             {"id": "c1", "kind": "task_card", "x": 0, "y": 496, "width": 304, "height": 100,
              "task_id": "task-77"},
             {"id": "q1", "kind": "quiz_card", "x": 400, "y": 496, "width": 304, "height": 100,
@@ -544,7 +548,9 @@ fn embeds_original() -> Value {
 fn embeds_typed() -> Value {
     json!({"blocks": [
         {"id": "k1", "kind": "paragraph", "spans": [{"text": "Public typed lesson"}]},
-        {"id": "k2", "kind": "reports_embed", "report_id": "rep-private-1", "mode": "snapshot",
+        {"id": "k2", "kind": "reports_embed", "report_id": "00000000-0000-4000-8000-000000000002",
+         "project_slug": "annotations", "report_slug": "typed-chart", "dataset_id": "primary-card",
+         "mode": "snapshot",
          "source": "upload", "snapshot_id": "snap-private-8", "captured_at": 1_700_000_456},
         {"id": "k3", "kind": "task_card", "task_id": "task-78"}
     ]})
@@ -625,24 +631,31 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
     ];
     forbidden.extend(revisions);
     forbidden.extend(document_ids);
+    forbidden.extend([
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        "00000000-0000-4000-8000-000000000002".to_string(),
+        "monthly-sales".to_string(),
+        "summary-card".to_string(),
+        "primary-card".to_string(),
+    ]);
     for value in &forbidden {
         assert!(
             !text.contains(value.as_str()),
             "public JSON leaks {value}: {text}"
         );
     }
-    // The exact public cards: reference, geometry and the restricted marker only.
+    // Reports public cards reveal only generic geometry and the restricted marker.
     let items = &public["representations"][0]["document"]["items"];
     assert_eq!(items[0], embeds_original()["items"][0]);
     assert_eq!(
         items[1],
         json!({"id": "r1", "kind": "reports_embed", "x": 0, "y": 104, "width": 400, "height": 304,
-               "report_id": "rep-private-1", "restricted": true})
+               "restricted": true})
     );
     assert_eq!(
         items[2],
         json!({"id": "r2", "kind": "reports_embed", "x": 496, "y": 104, "width": 400, "height": 304,
-               "report_id": "rep-live-2", "restricted": true})
+               "restricted": true})
     );
     assert_eq!(
         items[3],
@@ -657,7 +670,7 @@ async fn public_read_of_a_note_with_a_private_reports_embed_has_no_private_data(
     let blocks = &public["representations"][1]["document"]["blocks"];
     assert_eq!(
         blocks[1],
-        json!({"id": "k2", "kind": "reports_embed", "report_id": "rep-private-1", "restricted": true})
+        json!({"id": "k2", "kind": "reports_embed", "restricted": true})
     );
     assert_eq!(
         blocks[2],

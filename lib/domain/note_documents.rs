@@ -515,17 +515,68 @@ impl Ctx<'_> {
                     return fail("kind_not_allowed", item.at("source"));
                 }
                 reference(item, "report_id")?;
+                let tuple_keys = ["project_slug", "report_slug", "dataset_id"];
+                let tuple_fields = tuple_keys
+                    .iter()
+                    .filter(|key| item.opt(key).is_some())
+                    .count();
+                if tuple_fields != 0 && tuple_fields != tuple_keys.len() {
+                    let missing = tuple_keys
+                        .iter()
+                        .find(|key| item.opt(key).is_none())
+                        .copied()
+                        .unwrap_or("report_slug");
+                    return fail("missing_field", item.at(missing));
+                }
+                if tuple_fields == tuple_keys.len() {
+                    for key in tuple_keys {
+                        if !valid_reports_slug(item.str(key)?) {
+                            return fail("invalid_reference", item.at(key));
+                        }
+                    }
+                    if source == "link" && item.str("report_id")? != item.str("report_slug")? {
+                        return fail("invalid_reference", item.at("report_id"));
+                    }
+                    if source == "upload" {
+                        let raw_id = item.str("report_id")?;
+                        let owner_id = uuid::Uuid::parse_str(raw_id)
+                            .ok()
+                            .filter(|id| id.get_version_num() == 4 && id.to_string() == raw_id);
+                        if owner_id.is_none() {
+                            return fail("invalid_reference", item.at("report_id"));
+                        }
+                    }
+                }
                 if item.variant("mode", &["live", "snapshot"])? == "snapshot" {
                     item.allow_with(
                         base,
-                        &["report_id", "mode", "source", "snapshot_id", "captured_at"],
+                        &[
+                            "report_id",
+                            "project_slug",
+                            "report_slug",
+                            "dataset_id",
+                            "mode",
+                            "source",
+                            "snapshot_id",
+                            "captured_at",
+                        ],
                     )?;
                     reference(item, "snapshot_id")?;
                     if item.int("captured_at")? <= 0 {
                         return fail("out_of_range", item.at("captured_at"));
                     }
                 } else {
-                    item.allow_with(base, &["report_id", "mode", "source"])?;
+                    item.allow_with(
+                        base,
+                        &[
+                            "report_id",
+                            "project_slug",
+                            "report_slug",
+                            "dataset_id",
+                            "mode",
+                            "source",
+                        ],
+                    )?;
                 }
                 Ok(())
             }
@@ -872,6 +923,13 @@ fn token(s: &str, max: usize) -> bool {
         && s.len() <= max
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+fn valid_reports_slug(value: &str) -> bool {
+    (2..=48).contains(&value.len())
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 fn reference(item: &Obj, key: &str) -> R<()> {
     if !token(item.str(key)?, 128) {

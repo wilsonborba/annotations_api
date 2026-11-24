@@ -29,7 +29,10 @@
         "height": 120,
         "report_id": "report-42",
         "mode": "live",
-        "source": "link"
+        "source": "link",
+        "project_slug": "project-1",
+        "report_slug": "report-42",
+        "dataset_id": "dataset-1"
       }
     ]
   },

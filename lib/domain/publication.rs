@@ -37,11 +37,11 @@ type R<T> = std::result::Result<T, NoteError>;
 const CARD_KEYS: [&str; 6] = ["id", "kind", "x", "y", "width", "height"];
 
 /// The reference fields that a public card keeps, per embedded card kind. Every
-/// other field (mode, source, snapshot id, capture time and any later field) is
-/// dropped. `None` for kinds that the projection keeps as saved.
+/// other field, including Reports card and owner identifiers, is dropped.
+/// `None` for kinds that the projection keeps as saved.
 fn card_references(kind: &str) -> Option<&'static [&'static str]> {
     match kind {
-        "reports_embed" => Some(&["report_id"]),
+        "reports_embed" => Some(&[]),
         "task_card" => Some(&["task_id"]),
         "quiz_card" => Some(&["study_id", "quiz_id"]),
         _ => None,
@@ -50,11 +50,10 @@ fn card_references(kind: &str) -> Option<&'static [&'static str]> {
 
 /// The public form of one saved document (Original `items` or Typed `blocks`).
 ///
-/// Reports embeds, task cards and quiz cards keep only their id, kind, geometry,
-/// source reference and `"restricted": true`. The reader then loads the source
-/// through its owning service, which checks the viewer's access, and shows the
-/// restricted placeholder otherwise. No private value, thumbnail, snapshot or
-/// private title of a source ever comes from the note.
+/// Reports embeds keep only their id, kind, geometry and `"restricted": true`.
+/// Task and quiz cards retain their public reference. Source permissions are
+/// checked by the owning service. No Reports identity, private value, thumbnail,
+/// snapshot or private title ever comes from the public note.
 pub fn public_document(document: &Value) -> Value {
     let mut out = document.clone();
     for key in ["items", "blocks"] {

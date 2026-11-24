@@ -27,11 +27,14 @@
         "y": 40,
         "width": 300,
         "height": 120,
-        "report_id": "report-42",
+        "report_id": "00000000-0000-4000-8000-000000000001",
         "mode": "snapshot",
         "source": "upload",
         "snapshot_id": "snap-1",
-        "captured_at": 1794700000
+        "captured_at": 1794700000,
+        "project_slug": "project-1",
+        "report_slug": "report-42",
+        "dataset_id": "dataset-1"
       }
     ]
   },

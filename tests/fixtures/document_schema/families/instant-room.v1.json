@@ -91,6 +91,21 @@
       "path": "items[].samples.tilt[]",
       "field_type": "integer",
       "required": false
+    },
+    {
+      "path": "items[].project_slug",
+      "field_type": "string",
+      "required": false
+    },
+    {
+      "path": "items[].report_slug",
+      "field_type": "string",
+      "required": false
+    },
+    {
+      "path": "items[].dataset_id",
+      "field_type": "string",
+      "required": false
     }
   ]
 }
