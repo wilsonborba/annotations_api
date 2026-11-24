@@ -1,0 +1,44 @@
+{
+  "description": "Canonical Reports link saved snapshot",
+  "family": "note-original",
+  "schema_version": 1,
+  "files": [
+    "file-image-1",
+    "file-doc-1",
+    "file-csv-1",
+    "file-pdf-1",
+    "file-preview-1",
+    "file-preview-2"
+  ],
+  "document": {
+    "page": {
+      "width": 1000,
+      "background": {
+        "kind": "ruled",
+        "spacing": 32,
+        "visibility": 0.4
+      }
+    },
+    "items": [
+      {
+        "id": "b1",
+        "kind": "reports_embed",
+        "x": 40,
+        "y": 40,
+        "width": 300,
+        "height": 120,
+        "report_id": "report-42",
+        "mode": "snapshot",
+        "source": "link",
+        "project_slug": "project-1",
+        "report_slug": "report-42",
+        "dataset_id": "dataset-1",
+        "snapshot_id": "snap-link",
+        "captured_at": 1794700000
+      }
+    ]
+  },
+  "expect": {
+    "valid": true
+  }
+}

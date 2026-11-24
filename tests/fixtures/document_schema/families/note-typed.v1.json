@@ -16,6 +16,21 @@
       "path": "blocks[].kind",
       "field_type": "string",
       "required": false
+    },
+    {
+      "path": "blocks[].project_slug",
+      "field_type": "string",
+      "required": false
+    },
+    {
+      "path": "blocks[].report_slug",
+      "field_type": "string",
+      "required": false
+    },
+    {
+      "path": "blocks[].dataset_id",
+      "field_type": "string",
+      "required": false
     }
   ]
 }
