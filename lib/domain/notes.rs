@@ -1076,6 +1076,16 @@ pub struct PreparedCertificationInput {
 
 const MAX_SELECTION_SPEC_BYTES: usize = 2000;
 const MAX_SELECTION_RANGES: usize = 100;
+const MAX_SELECTED_PDF_PAGES: u64 = 100;
+
+fn normalize_mime_base(mime_type: &str) -> String {
+    mime_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
 
 fn parse_ascii_u64(s: &str) -> Option<u64> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
@@ -1115,7 +1125,7 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
     }
     match kind {
         "pages" => {
-            if !mime_type.trim().eq_ignore_ascii_case("application/pdf") {
+            if normalize_mime_base(mime_type) != "application/pdf" {
                 return Err(NoteError::invalid(
                     "invalid_selection",
                     "pages selection requires application/pdf source",
@@ -1129,6 +1139,7 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
                 ));
             }
             let mut ranges: Vec<(u32, u32)> = Vec::with_capacity(parts.len());
+            let mut total_pages: u64 = 0;
             for raw_part in parts {
                 let part = raw_part.trim();
                 if part.is_empty() {
@@ -1171,6 +1182,13 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
                         "Page ranges must be strictly increasing and disjoint",
                     ));
                 }
+                total_pages = total_pages.saturating_add(u64::from(e - s + 1));
+                if total_pages > MAX_SELECTED_PDF_PAGES {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Total selected PDF pages must not exceed 100",
+                    ));
+                }
                 ranges.push((s, e));
             }
             Ok(ranges
@@ -1186,13 +1204,10 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
                 .join(","))
         }
         "passages" => {
-            let m = mime_type.trim().to_ascii_lowercase();
-            if !m.starts_with("text/")
-                && m != "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            {
+            if !normalize_mime_base(mime_type).starts_with("text/") {
                 return Err(NoteError::invalid(
                     "invalid_selection",
-                    "passages selection requires text or DOCX source",
+                    "passages selection requires text/* source",
                 ));
             }
             let parts: Vec<&str> = trimmed.split(',').collect();
@@ -1240,7 +1255,7 @@ fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> 
                 .join(","))
         }
         "intervals" => {
-            if !mime_type.trim().to_ascii_lowercase().starts_with("audio/") {
+            if !normalize_mime_base(mime_type).starts_with("audio/") {
                 return Err(NoteError::invalid(
                     "invalid_selection",
                     "intervals selection requires an audio source",
