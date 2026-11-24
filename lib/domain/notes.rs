@@ -965,8 +965,11 @@ pub async fn patch(
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterReportReferenceInput {
-    pub report_item_id: String,
-    pub relation_kind: String,
+    pub mode: Option<String>,
+    pub project: Option<String>,
+    pub item: Option<Value>,
+    pub report_item_id: Option<String>,
+    pub relation_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -989,11 +992,51 @@ pub struct FailedReportDeletion {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+pub struct ReusedReportWarning {
+    pub report_item_id: String,
+    pub reused_by_note_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct DeleteNoteOutcome {
     pub note_deleted: bool,
     pub deleted_report_ids: Vec<String>,
     pub failed_report_deletions: Vec<FailedReportDeletion>,
+    pub reused_warnings: Vec<ReusedReportWarning>,
     pub skipped_linked_count: usize,
+}
+
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = err {
+        let code = db_err.code().unwrap_or_default();
+        if code == "23505" || code == "2067" || code == "1555" {
+            return true;
+        }
+        if db_err.message().contains("UNIQUE constraint failed") {
+            return true;
+        }
+    }
+    false
+}
+
+fn map_reports_err(err: crate::core::Error, fallback_msg: &str) -> NoteError {
+    match err.0 {
+        axum::http::StatusCode::FORBIDDEN => {
+            NoteError::new(StatusCode::FORBIDDEN, "forbidden", err.1)
+        }
+        axum::http::StatusCode::NOT_FOUND => NoteError::invalid(
+            "report_item_not_found",
+            "Reports item or project was not found",
+        ),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY | axum::http::StatusCode::BAD_REQUEST => {
+            NoteError::invalid("invalid_report_item", &err.1)
+        }
+        _ => NoteError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reports_unavailable",
+            fallback_msg,
+        ),
+    }
 }
 
 pub async fn register_report_reference(
@@ -1002,7 +1045,70 @@ pub async fn register_report_reference(
     note_id: &str,
     input: RegisterReportReferenceInput,
 ) -> R<Value> {
-    let item_id = input.report_item_id.trim();
+    let exists = sqlx::query("SELECT 1 FROM notes WHERE note_id=$1 AND owner_id=$2")
+        .bind(note_id)
+        .bind(owner)
+        .fetch_optional(&store.db)
+        .await?;
+    if exists.is_none() {
+        return Err(NoteError::not_found());
+    }
+
+    let mode = input.mode.as_deref().unwrap_or("link").trim();
+    if mode == "create" {
+        let project = input.project.as_deref().unwrap_or("").trim();
+        if project.is_empty() {
+            return Err(NoteError::invalid(
+                "invalid_project",
+                "project is required when mode is create",
+            ));
+        }
+        let item_payload = input.item.ok_or_else(|| {
+            NoteError::invalid("invalid_report_item", "item payload is required for create")
+        })?;
+        let created_item_id = store
+            .reports
+            .create_owned_item(owner, project, item_payload)
+            .await
+            .map_err(|e| map_reports_err(e, "Reports service could not create item"))?;
+
+        let now = core::now();
+        let mut tx = store.db.begin().await?;
+        let res = sqlx::query(
+            "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at)
+             VALUES($1,$2,$3,'created_for_note',$4,$4)",
+        )
+        .bind(note_id)
+        .bind(owner)
+        .bind(&created_item_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await;
+        if let Err(err) = res {
+            if is_unique_violation(&err) {
+                return Err(NoteError::invalid(
+                    "already_owned_by_other_note",
+                    "This Reports item is already recorded as created for another note",
+                ));
+            }
+            return Err(err.into());
+        }
+        tx.commit().await?;
+        return Ok(json!({
+            "note_id": note_id,
+            "report_item_id": created_item_id,
+            "relation_kind": "created_for_note",
+        }));
+    }
+
+    if mode != "link" {
+        return Err(NoteError::invalid(
+            "invalid_mode",
+            "mode must be create or link",
+        ));
+    }
+
+    let item_id = input.report_item_id.as_deref().unwrap_or("").trim();
     if item_id.is_empty()
         || item_id.len() > 128
         || item_id
@@ -1014,81 +1120,40 @@ pub async fn register_report_reference(
             "report_item_id is invalid",
         ));
     }
-    if !matches!(input.relation_kind.as_str(), "created_for_note" | "linked") {
+    let relation_kind = input.relation_kind.as_deref().unwrap_or("linked").trim();
+    if relation_kind == "created_for_note" {
         return Err(NoteError::invalid(
-            "invalid_relation_kind",
-            "relation_kind must be created_for_note or linked",
+            "provenance_required",
+            "created_for_note requires server-verified creation through Notes (mode=create)",
         ));
     }
-    let exists = sqlx::query("SELECT 1 FROM notes WHERE note_id=$1 AND owner_id=$2")
-        .bind(note_id)
-        .bind(owner)
-        .fetch_optional(&store.db)
-        .await?;
-    if exists.is_none() {
-        return Err(NoteError::not_found());
-    }
-
-    if input.relation_kind == "created_for_note" {
-        store
-            .reports
-            .verify_owned_item(owner, item_id)
-            .await
-            .map_err(|err| match err.0 {
-                axum::http::StatusCode::FORBIDDEN => NoteError::new(
-                    StatusCode::FORBIDDEN,
-                    "forbidden",
-                    "Caller does not own this Reports item",
-                ),
-                axum::http::StatusCode::NOT_FOUND => NoteError::invalid(
-                    "report_item_not_found",
-                    "Reports item was not found for this owner",
-                ),
-                _ => NoteError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "reports_unavailable",
-                    "Reports service could not verify item ownership",
-                ),
-            })?;
-
-        let other_creator = sqlx::query(
-            "SELECT note_id FROM note_report_references WHERE report_item_id=$1 AND relation_kind='created_for_note' AND note_id<>$2 LIMIT 1",
-        )
-        .bind(item_id)
-        .bind(note_id)
-        .fetch_optional(&store.db)
-        .await?;
-        if other_creator.is_some() {
-            return Err(NoteError::invalid(
-                "already_owned_by_other_note",
-                "This Reports item is already recorded as created for another note",
-            ));
-        }
+    if relation_kind != "linked" {
+        return Err(NoteError::invalid(
+            "invalid_relation_kind",
+            "relation_kind must be linked for existing report_item_id registration",
+        ));
     }
 
     let now = core::now();
+    let mut tx = store.db.begin().await?;
     sqlx::query(
         "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at)
-         VALUES($1,$2,$3,$4,$5,$5)
+         VALUES($1,$2,$3,'linked',$4,$4)
          ON CONFLICT(note_id,report_item_id) DO UPDATE SET
-            relation_kind = CASE
-                WHEN note_report_references.relation_kind='created_for_note' THEN 'created_for_note'
-                ELSE excluded.relation_kind
-            END,
             updated_at = excluded.updated_at",
     )
     .bind(note_id)
     .bind(owner)
     .bind(item_id)
-    .bind(&input.relation_kind)
     .bind(now)
-    .execute(&store.db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(json!({
         "note_id": note_id,
         "report_item_id": item_id,
-        "relation_kind": input.relation_kind,
+        "relation_kind": "linked",
     }))
 }
 
@@ -1119,11 +1184,14 @@ pub async fn report_delete_preview(
         let item_id: String = r.get("report_item_id");
         let kind: String = r.get("relation_kind");
         if kind == "created_for_note" {
+            // Restrict reused_by_note_ids strictly to notes owned by the caller so
+            // another owner's note UUID is never disclosed.
             let other_notes: Vec<String> = sqlx::query(
-                "SELECT DISTINCT note_id FROM note_report_references WHERE report_item_id=$1 AND note_id<>$2 ORDER BY note_id ASC",
+                "SELECT DISTINCT note_id FROM note_report_references WHERE report_item_id=$1 AND note_id<>$2 AND owner_id=$3 ORDER BY note_id ASC",
             )
             .bind(&item_id)
             .bind(note_id)
+            .bind(owner)
             .fetch_all(&store.db)
             .await?
             .into_iter()
@@ -1150,8 +1218,18 @@ pub async fn run_report_cleanup(
     note_id: &str,
     skipped_linked_count: usize,
 ) -> R<DeleteNoteOutcome> {
+    run_report_cleanup_with_warnings(store, owner, note_id, Vec::new(), skipped_linked_count).await
+}
+
+async fn run_report_cleanup_with_warnings(
+    store: &Store,
+    owner: &str,
+    note_id: &str,
+    reused_warnings: Vec<ReusedReportWarning>,
+    skipped_linked_count: usize,
+) -> R<DeleteNoteOutcome> {
     let rows = sqlx::query(
-        "SELECT report_item_id FROM note_report_cleanup WHERE note_id=$1 AND owner_id=$2 AND status IN ('pending','failed') ORDER BY report_item_id ASC",
+        "SELECT report_item_id, confirm_reused FROM note_report_cleanup WHERE note_id=$1 AND owner_id=$2 AND status IN ('pending','failed') ORDER BY report_item_id ASC",
     )
     .bind(note_id)
     .bind(owner)
@@ -1163,7 +1241,12 @@ pub async fn run_report_cleanup(
     let now = core::now();
     for row in rows {
         let item_id: String = row.get("report_item_id");
-        match store.reports.delete_owned_item(owner, &item_id).await {
+        let confirm_reused: i64 = row.get("confirm_reused");
+        match store
+            .reports
+            .delete_owned_item(owner, &item_id, confirm_reused != 0)
+            .await
+        {
             Ok(()) => {
                 sqlx::query(
                     "UPDATE note_report_cleanup SET status='deleted', last_error='', updated_at=$1 WHERE note_id=$2 AND report_item_id=$3",
@@ -1178,6 +1261,7 @@ pub async fn run_report_cleanup(
             Err(err) => {
                 let code = match err.0 {
                     axum::http::StatusCode::FORBIDDEN => "forbidden",
+                    axum::http::StatusCode::CONFLICT => "reused_confirmation_required",
                     _ => "reports_unavailable",
                 }
                 .to_string();
@@ -1201,19 +1285,22 @@ pub async fn run_report_cleanup(
         note_deleted: true,
         deleted_report_ids,
         failed_report_deletions,
+        reused_warnings,
         skipped_linked_count,
     })
 }
 
 /// Deletes an owned note. With `delete_owned_reports=true`, cascades deletion
-/// strictly to Reports items authoritatively recorded as created for this note
-/// and owned by the caller. Linked/pre-existing or cross-owner items are skipped.
+/// strictly to unreused `created_for_note` Reports items owned by the caller.
+/// Reused `created_for_note` items are skipped with explicit `reused_warnings`
+/// unless explicitly confirmed in `confirm_reused_report_ids`.
 pub async fn delete(
     store: &Store,
     owner: &str,
     note_id: &str,
     if_match: i64,
     delete_owned_reports: Option<&str>,
+    confirm_reused_report_ids: &[String],
 ) -> R<(bool, DeleteNoteOutcome)> {
     let cascade = match delete_owned_reports {
         None | Some("false") => false,
@@ -1265,20 +1352,49 @@ pub async fn delete(
     .await?;
 
     let mut skipped_linked_count = 0usize;
+    let mut reused_warnings = Vec::new();
     if cascade {
         for r in &ref_rows {
             let ref_owner: String = r.get("owner_id");
             let item_id: String = r.get("report_item_id");
             let kind: String = r.get("relation_kind");
             if kind == "created_for_note" && ref_owner == owner {
+                let reused_elsewhere = sqlx::query(
+                    "SELECT 1 FROM note_report_references WHERE report_item_id=$1 AND note_id<>$2 LIMIT 1",
+                )
+                .bind(&item_id)
+                .bind(note_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+                if reused_elsewhere && !confirm_reused_report_ids.iter().any(|id| id == &item_id) {
+                    let caller_reused_notes: Vec<String> = sqlx::query(
+                        "SELECT DISTINCT note_id FROM note_report_references WHERE report_item_id=$1 AND note_id<>$2 AND owner_id=$3 ORDER BY note_id ASC",
+                    )
+                    .bind(&item_id)
+                    .bind(note_id)
+                    .bind(owner)
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .into_iter()
+                    .map(|row| row.get("note_id"))
+                    .collect();
+                    reused_warnings.push(ReusedReportWarning {
+                        report_item_id: item_id,
+                        reused_by_note_ids: caller_reused_notes,
+                    });
+                    continue;
+                }
+                let confirm_flag: i64 = if reused_elsewhere { 1 } else { 0 };
                 sqlx::query(
-                    "INSERT INTO note_report_cleanup(note_id,owner_id,report_item_id,status,attempts,last_error,updated_at)
-                     VALUES($1,$2,$3,'pending',0,'',$4)
+                    "INSERT INTO note_report_cleanup(note_id,owner_id,report_item_id,status,confirm_reused,attempts,last_error,updated_at)
+                     VALUES($1,$2,$3,'pending',$4,0,'',$5)
                      ON CONFLICT(note_id,report_item_id) DO NOTHING",
                 )
                 .bind(note_id)
                 .bind(owner)
                 .bind(&item_id)
+                .bind(confirm_flag)
                 .bind(now)
                 .execute(&mut *tx)
                 .await?;
@@ -1328,7 +1444,14 @@ pub async fn delete(
         tracing::warn!("Deleted note document cleanup is pending; it will retry");
     }
     if cascade {
-        let outcome = run_report_cleanup(store, owner, note_id, skipped_linked_count).await?;
+        let outcome = run_report_cleanup_with_warnings(
+            store,
+            owner,
+            note_id,
+            reused_warnings,
+            skipped_linked_count,
+        )
+        .await?;
         Ok((true, outcome))
     } else {
         Ok((
@@ -1337,6 +1460,7 @@ pub async fn delete(
                 note_deleted: true,
                 deleted_report_ids: Vec::new(),
                 failed_report_deletions: Vec::new(),
+                reused_warnings: Vec::new(),
                 skipped_linked_count: 0,
             },
         ))

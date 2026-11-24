@@ -294,6 +294,7 @@ async fn change(
 #[derive(serde::Deserialize)]
 pub struct DeleteParams {
     delete_owned_reports: Option<String>,
+    confirm_reused_report_ids: Option<String>,
 }
 async fn remove(
     State(app): State<App>,
@@ -303,12 +304,24 @@ async fn remove(
     headers: HeaderMap,
 ) -> Result<Response, NoteError> {
     let expected = if_match(&headers)?;
+    let confirmed_reused: Vec<String> = p
+        .confirm_reused_report_ids
+        .as_deref()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let (cascade, outcome) = notes::delete(
         &app.store,
         &owner,
         &note_id,
         expected,
         p.delete_owned_reports.as_deref(),
+        &confirmed_reused,
     )
     .await?;
     if cascade {

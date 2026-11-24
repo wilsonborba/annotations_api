@@ -216,6 +216,7 @@ async fn note_remove(
         &note_id,
         expected,
         p.delete_owned_reports.as_deref(),
+        &[],
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)

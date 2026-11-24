@@ -12,11 +12,16 @@ CREATE TABLE IF NOT EXISTS note_report_references (
 CREATE INDEX IF NOT EXISTS idx_note_report_refs_item
     ON note_report_references (report_item_id, relation_kind);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_note_report_refs_single_creator
+    ON note_report_references (report_item_id)
+    WHERE relation_kind = 'created_for_note';
+
 CREATE TABLE IF NOT EXISTS note_report_cleanup (
     note_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
     report_item_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'deleted', 'failed')),
+    confirm_reused INTEGER NOT NULL DEFAULT 0 CHECK (confirm_reused IN (0, 1)),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     last_error TEXT NOT NULL DEFAULT '',
     updated_at BIGINT NOT NULL,
