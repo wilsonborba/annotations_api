@@ -1183,12 +1183,189 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
     .await;
     assert_eq!(ok.status, StatusCode::CREATED, "{:?}", ok.body);
     assert_eq!(ok.body["study"]["id"], "study-prep-1");
-    let calls = captured.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, A);
-    assert_eq!(calls[0].1, "cert-svc-secret");
+    assert_eq!(captured.lock().unwrap().len(), 1);
+    assert_eq!(captured.lock().unwrap()[0].0, A);
+    assert_eq!(captured.lock().unwrap()[0].1, "cert-svc-secret");
     assert_eq!(
-        calls[0].2["sources"][0]["fsm_ref"],
+        captured.lock().unwrap()[0].2["sources"][0]["fsm_ref"],
         "annotations/a/slides.pdf"
     );
+
+    // Reject forged authority fields and malformed selections with zero downstream calls.
+    let forged = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Forged",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "fsm_ref": "evil/ref"}]
+        })),
+    )
+    .await;
+    assert!(
+        matches!(
+            forged.status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{:?}",
+        forged.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    let bad_sel = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Sel",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "5-2"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_sel.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_sel.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Stale expected_revision fails closed with 409 and zero downstream calls.
+    let stale_rev = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Stale Rev",
+            "expected_revision": 999,
+            "sources": [{"kind": "note_original"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        stale_rev.status,
+        StatusCode::CONFLICT,
+        "{:?}",
+        stale_rev.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Stale/wrong revision_id fails closed with 422 and zero downstream calls.
+    let wrong_rev_id = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Wrong RevId",
+            "sources": [{"kind": "note_typed", "revision_id": "rev-does-not-exist"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        wrong_rev_id.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        wrong_rev_id.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Create a note with both original and typed representations.
+    let typed_doc = json!({
+        "blocks": [
+            {"id": "h1", "kind": "heading", "level": 1, "spans": [{"text": "Cellular Respiration"}]},
+            {"id": "p1", "kind": "paragraph", "spans": [{"text": "ATP synthesis in mitochondria."}]}
+        ]
+    });
+    let create_both = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-mixed-cert",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": original(40)},
+                "typed": {"schema_version": 1, "document": typed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        create_both.status,
+        StatusCode::CREATED,
+        "{:?}",
+        create_both.body
+    );
+    let mixed_note_id = create_both.body["note_id"].as_str().unwrap().to_string();
+    let updated_rev = create_both.body["revision"].as_i64().unwrap();
+
+    let files_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+        .bind(A)
+        .fetch_one(&store.db)
+        .await
+        .unwrap();
+
+    // Handoff mixing note_original, note_typed, and file materializes note text into FSM once.
+    let mixed = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Mixed Study",
+            "expected_revision": updated_rev,
+            "sources": [
+                {"kind": "note_original"},
+                {"kind": "note_typed", "selection_kind": "passages", "selection_spec": "p1:0-10"},
+                {"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-3"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(mixed.status, StatusCode::CREATED, "{:?}", mixed.body);
+    let files_after_first: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+        .bind(A)
+        .fetch_one(&store.db)
+        .await
+        .unwrap();
+    assert_eq!(files_after_first, files_before + 2);
+
+    // Repeating the same note_original + note_typed handoff dedups against existing ready files (no new FSM uploads).
+    let mixed_repeat = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Mixed Study Repeat",
+            "expected_revision": updated_rev,
+            "sources": [
+                {"kind": "note_original"},
+                {"kind": "note_typed"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(
+        mixed_repeat.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_repeat.body
+    );
+    let files_after_repeat: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+            .bind(A)
+            .fetch_one(&store.db)
+            .await
+            .unwrap();
+    assert_eq!(files_after_repeat, files_after_first);
 }
