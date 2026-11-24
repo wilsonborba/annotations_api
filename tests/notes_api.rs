@@ -1323,6 +1323,65 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
             .iter()
             .any(|(o, id, c)| o == A && id == &rep_confirmed && *c)
     );
+
+    // Opaque server-minted receipt idempotency:
+    // 1) Reusing operation_key with a different project or payload fails 409 BEFORE calling Reports.
+    let op_k = "op-create-1";
+    let first_create = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Receipt Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(first_create.status, StatusCode::CREATED);
+    let first_id = first_create.body["report_item_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Retry with exact same operation_key + payload returns the same item without duplicating.
+    let retry_create = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Receipt Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(retry_create.status, StatusCode::CREATED);
+    assert_eq!(retry_create.body["report_item_id"], first_id);
+
+    // Changed payload or project with same operation_key fails 409 Conflict!
+    let changed_payload = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Different Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(changed_payload.status, StatusCode::CONFLICT);
+    assert_eq!(changed_payload.body["code"], "operation_key_conflict");
 }
 
 #[tokio::test]

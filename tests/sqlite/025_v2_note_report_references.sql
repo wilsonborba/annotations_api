@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS note_report_create_receipts (
     owner_id TEXT NOT NULL,
     operation_key TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    request_digest TEXT NOT NULL DEFAULT '',
     report_item_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL CHECK (status IN ('pending', 'recorded')),
     updated_at INTEGER NOT NULL,
@@ -36,15 +38,4 @@ CREATE TABLE IF NOT EXISTS note_report_cleanup (
     last_error TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (note_id, report_item_id)
-);
-
-CREATE TABLE IF NOT EXISTS note_report_create_receipts (
-    note_id TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    operation_key TEXT NOT NULL,
-    idempotency_key TEXT NOT NULL,
-    report_item_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL CHECK (status IN ('pending', 'recorded')),
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (note_id, owner_id, operation_key)
 );

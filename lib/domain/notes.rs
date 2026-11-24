@@ -1074,20 +1074,60 @@ pub async fn register_report_reference(
             .filter(|s| !s.is_empty() && s.len() <= 128)
             .map(str::to_string)
             .unwrap_or_else(core::id);
-        let server_idem_key = format!("notes:{note_id}:{op_key}");
+        let request_digest = {
+            use sha2::{Digest, Sha256};
+            let canonical = serde_json::to_vec(&item_payload).unwrap_or_default();
+            let mut hasher = Sha256::new();
+            hasher.update(project.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&canonical);
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let minted_idem_key = core::id();
         let now = core::now();
-        sqlx::query(
-            "INSERT INTO note_report_create_receipts(note_id,owner_id,operation_key,idempotency_key,report_item_id,status,updated_at)
-             VALUES($1,$2,$3,$4,'','pending',$5)
+        let inserted = sqlx::query(
+            "INSERT INTO note_report_create_receipts(note_id,owner_id,operation_key,idempotency_key,project,request_digest,report_item_id,status,updated_at)
+             VALUES($1,$2,$3,$4,$5,$6,'','pending',$7)
              ON CONFLICT(note_id,owner_id,operation_key) DO NOTHING",
         )
         .bind(note_id)
         .bind(owner)
         .bind(&op_key)
-        .bind(&server_idem_key)
+        .bind(&minted_idem_key)
+        .bind(project)
+        .bind(&request_digest)
         .bind(now)
         .execute(&store.db)
-        .await?;
+        .await?
+        .rows_affected();
+
+        let server_idem_key = if inserted == 1 {
+            minted_idem_key
+        } else {
+            let receipt = sqlx::query(
+                "SELECT idempotency_key, project, request_digest FROM note_report_create_receipts
+                 WHERE note_id=$1 AND owner_id=$2 AND operation_key=$3",
+            )
+            .bind(note_id)
+            .bind(owner)
+            .bind(&op_key)
+            .fetch_one(&store.db)
+            .await?;
+            let stored_project: String = receipt.get("project");
+            let stored_digest: String = receipt.get("request_digest");
+            if stored_project != project || stored_digest != request_digest {
+                return Err(NoteError::new(
+                    StatusCode::CONFLICT,
+                    "operation_key_conflict",
+                    "operation_key was already used with a different project or item payload",
+                ));
+            }
+            receipt.get("idempotency_key")
+        };
 
         let meta = store
             .reports
