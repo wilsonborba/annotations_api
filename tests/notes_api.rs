@@ -1038,3 +1038,157 @@ async fn request_bodies_are_checked_before_any_write() {
     );
     assert_eq!(document_count(&store), 0);
 }
+
+#[tokio::test]
+async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key() {
+    use annotations_api::dal::certifications::HttpCertifications;
+    use axum::{Json, Router, http::HeaderMap, routing::post};
+    use std::sync::{Arc, Mutex};
+
+    let captured: Arc<Mutex<Vec<(String, String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_srv = captured.clone();
+    let fake_cert = Router::new().route(
+        "/studies/prepared",
+        post(move |headers: HeaderMap, Json(body): Json<Value>| {
+            let captured = captured_srv.clone();
+            async move {
+                let uuid = headers
+                    .get("x-uuid")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let key = headers
+                    .get("x-service-key")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                if key != "cert-svc-secret" {
+                    return (StatusCode::FORBIDDEN, Json(json!({"error": "bad key"})));
+                }
+                captured.lock().unwrap().push((uuid.clone(), key, body.clone()));
+                (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "study": {"id": "study-prep-1", "owner_id": uuid, "source_origin": "annotations"},
+                        "sources": body["sources"]
+                    })),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, fake_cert).await.unwrap();
+    });
+
+    let (mut store, _) = setup().await;
+    let router_unconfigured = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router_unconfigured,
+        A,
+        json!({
+            "client_note_id": "prep-n1",
+            "metadata": {"title": "Study Note"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Study Note")}}
+        }),
+    )
+    .await;
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+    let _ = create(
+        &router_unconfigured,
+        B,
+        json!({
+            "client_note_id": "prep-nb",
+            "metadata": {"title": "Study Note B"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Study Note B")}}
+        }),
+    )
+    .await;
+
+    sqlx::query(
+        "INSERT INTO files(file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,created_at,updated_at,fsm_reference)
+         VALUES('file-a-ready',$1,'slides.pdf','application/pdf',42,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','attachment','ready',1,1,'annotations/a/slides.pdf')",
+    )
+    .bind(A)
+    .execute(&store.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO files(file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,created_at,updated_at,fsm_reference)
+         VALUES('file-b-ready',$1,'b.pdf','application/pdf',10,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','attachment','ready',1,1,'annotations/b/b.pdf')",
+    )
+    .bind(B)
+    .execute(&store.db)
+    .await
+    .unwrap();
+
+    // Unconfigured certifications client fails closed with 503.
+    let unconf = call(
+        &router_unconfigured,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "sources": [{"file_id": "file-a-ready"}]
+        })),
+    )
+    .await;
+    assert_eq!(unconf.status, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Configured HttpCertifications forwards x-uuid + x-service-key + authoritative fsm_reference.
+    store.certifications = HttpCertifications::client(
+        format!("http://{addr}"),
+        "cert-svc-secret".into(),
+        reqwest::Client::new(),
+    );
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    // Reject referencing another user's file_id.
+    let stolen = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "sources": [{"file_id": "file-b-ready"}]
+        })),
+    )
+    .await;
+    assert_eq!(stolen.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(captured.lock().unwrap().is_empty());
+
+    // Succeeds for owned ready file without browser holding CERTIFICATIONS_SERVICE_KEY or raw fsm_ref.
+    let ok = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "description": "From note",
+            "sources": [{"file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-3"}]
+        })),
+    )
+    .await;
+    assert_eq!(ok.status, StatusCode::CREATED, "{:?}", ok.body);
+    assert_eq!(ok.body["study"]["id"], "study-prep-1");
+    let calls = captured.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, A);
+    assert_eq!(calls[0].1, "cert-svc-secret");
+    assert_eq!(
+        calls[0].2["sources"][0]["fsm_ref"],
+        "annotations/a/slides.pdf"
+    );
+}

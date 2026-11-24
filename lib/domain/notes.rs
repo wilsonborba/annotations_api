@@ -1054,3 +1054,123 @@ pub async fn delete(
     }
     Ok(())
 }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationSourceInput {
+    pub file_id: String,
+    pub selection_kind: Option<String>,
+    pub selection_spec: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationInput {
+    pub title: String,
+    pub description: Option<String>,
+    pub sources: Vec<PreparedCertificationSourceInput>,
+}
+
+/// Server-to-server handoff from Notes to Certifications `POST /studies/prepared`.
+/// Looks up authoritative owned ready `files` rows (`fsm_reference`) by `file_id`
+/// and forwards `x-uuid` + `CERTIFICATIONS_SERVICE_KEY` server-side so browsers
+/// never hold service credentials or supply raw `fsm_ref` values.
+pub async fn create_prepared_certification_study(
+    store: &Store,
+    owner: &str,
+    note_id: &str,
+    input: PreparedCertificationInput,
+) -> R<Value> {
+    let title = input.title.trim();
+    if title.is_empty() || title.chars().count() > 200 {
+        return Err(NoteError::invalid(
+            "invalid_title",
+            "title must be 1 to 200 characters",
+        ));
+    }
+    if input.sources.is_empty() || input.sources.len() > 20 {
+        return Err(NoteError::invalid(
+            "invalid_sources",
+            "Prepared study requires 1 to 20 sources",
+        ));
+    }
+    let note_exists = sqlx::query("SELECT 1 FROM notes WHERE note_id=$1 AND owner_id=$2")
+        .bind(note_id)
+        .bind(owner)
+        .fetch_optional(&store.db)
+        .await?;
+    if note_exists.is_none() {
+        return Err(NoteError::not_found());
+    }
+
+    let mut prepared_sources = Vec::with_capacity(input.sources.len());
+    for s in &input.sources {
+        let fid = s.file_id.trim();
+        if fid.is_empty() {
+            return Err(NoteError::invalid("invalid_source", "file_id is required"));
+        }
+        let row = sqlx::query(
+            "SELECT filename, content_type, size_bytes, sha256, status, fsm_reference FROM files WHERE file_id=$1 AND owner_id=$2",
+        )
+        .bind(fid)
+        .bind(owner)
+        .fetch_optional(&store.db)
+        .await?;
+        let Some(r) = row else {
+            return Err(NoteError::invalid(
+                "file_not_found",
+                "Referenced file does not exist for this owner",
+            ));
+        };
+        let status: String = r.get("status");
+        let fsm_ref: Option<String> = r.get("fsm_reference");
+        let Some(fsm_ref) = fsm_ref.filter(|v| !v.trim().is_empty()) else {
+            return Err(NoteError::invalid(
+                "file_not_ready",
+                "Referenced file is not ready for Certifications handoff",
+            ));
+        };
+        if status != "ready" {
+            return Err(NoteError::invalid(
+                "file_not_ready",
+                "Referenced file is not ready for Certifications handoff",
+            ));
+        }
+        let filename: String = r.get("filename");
+        let mime_type: String = r.get("content_type");
+        let size_bytes: i64 = r.get("size_bytes");
+        let sha256: String = r.get("sha256");
+        prepared_sources.push(json!({
+            "filename": filename,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
+            "sha256": sha256,
+            "fsm_ref": fsm_ref,
+            "selection_kind": s.selection_kind.as_deref().unwrap_or("all"),
+            "selection_spec": s.selection_spec.as_deref().unwrap_or(""),
+        }));
+    }
+
+    let payload = json!({
+        "title": title,
+        "description": input.description.as_deref().unwrap_or(""),
+        "sources": prepared_sources,
+    });
+    store
+        .certifications
+        .create_prepared_study(owner, payload)
+        .await
+        .map_err(|err| match err.0 {
+            axum::http::StatusCode::FORBIDDEN => {
+                NoteError::new(StatusCode::FORBIDDEN, "forbidden", err.1)
+            }
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY | axum::http::StatusCode::BAD_REQUEST => {
+                NoteError::invalid("invalid_prepared_study", &err.1)
+            }
+            _ => NoteError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "certifications_unavailable",
+                "Certifications service is unavailable",
+            ),
+        })
+}

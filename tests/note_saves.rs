@@ -143,6 +143,8 @@ fn couch_down() -> Documents {
             gateway_url: String::new(),
             plane_api_key: String::new(),
             plane_workspace: String::new(),
+            certifications_url: String::new(),
+            certifications_service_key: String::new(),
             host: String::new(),
             port: 0,
             development: false,
