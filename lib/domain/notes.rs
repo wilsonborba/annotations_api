@@ -1065,6 +1065,15 @@ pub struct PreparedCertificationSourceInput {
     pub selection_spec: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationConfigInput {
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub count: Option<i64>,
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedCertificationInput {
@@ -1072,6 +1081,8 @@ pub struct PreparedCertificationInput {
     pub description: Option<String>,
     pub expected_revision: Option<i64>,
     pub sources: Vec<PreparedCertificationSourceInput>,
+    #[serde(default)]
+    pub config: Option<PreparedCertificationConfigInput>,
 }
 
 const MAX_SELECTION_SPEC_BYTES: usize = 2000;
@@ -1414,6 +1425,36 @@ pub async fn create_prepared_certification_study(
         });
     }
 
+    let validated_config = if let Some(ref cfg) = input.config {
+        let lang = match cfg.language.as_deref().map(str::trim) {
+            Some("en") | None | Some("") => "en".to_string(),
+            Some("pt-BR") => "pt-BR".to_string(),
+            Some("th") => "th".to_string(),
+            Some(other) => {
+                return Err(NoteError::invalid(
+                    "invalid_config",
+                    format!("Unsupported language '{other}'. Supported languages: en, pt-BR, th"),
+                ));
+            }
+        };
+        let count = match cfg.count {
+            Some(c) if (1..=20).contains(&c) => c,
+            None => 10,
+            Some(c) => {
+                return Err(NoteError::invalid(
+                    "invalid_config",
+                    format!("Invalid question count {c}. Count must be between 1 and 20"),
+                ));
+            }
+        };
+        Some(json!({
+            "language": lang,
+            "count": count,
+        }))
+    } else {
+        None
+    };
+
     let mut pending_sources = Vec::with_capacity(input.sources.len());
     for s in &input.sources {
         let kind = match s.kind.as_deref().map(str::trim) {
@@ -1660,11 +1701,14 @@ pub async fn create_prepared_certification_study(
         }
     }
 
-    let payload = json!({
+    let mut payload = json!({
         "title": title,
         "description": input.description.as_deref().unwrap_or(""),
         "sources": prepared_sources,
     });
+    if let Some(cfg) = validated_config {
+        payload["config"] = cfg;
+    }
     store
         .certifications
         .create_prepared_study(owner, payload)

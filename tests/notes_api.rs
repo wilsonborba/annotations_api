@@ -1254,6 +1254,84 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
     );
     assert_eq!(captured.lock().unwrap().len(), 1);
 
+    // Reject invalid config language with 422 and zero downstream calls.
+    let bad_config_lang = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Lang Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "de",
+                "count": 5
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_config_lang.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_config_lang.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Reject invalid config count (< 1 or > 20) with 422 and zero downstream calls.
+    let bad_config_count = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Count Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "en",
+                "count": 25
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_config_count.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_config_count.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Reject unknown fields in config with 400/422 and zero downstream calls.
+    let bad_config_forged = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Forged Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "en",
+                "count": 5,
+                "admin": true
+            }
+        })),
+    )
+    .await;
+    assert!(
+        matches!(
+            bad_config_forged.status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{:?}",
+        bad_config_forged.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
     // Stale expected_revision fails closed with 409 and zero downstream calls.
     let stale_rev = call(
         &router,
@@ -1296,6 +1374,34 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
         wrong_rev_id.body
     );
     assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Nondefault config (Portuguese, count 15) successfully forwards to downstream Certifications.
+    let ok_with_config = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep with Config",
+            "description": "Portuguese 15 questions",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "pt-BR",
+                "count": 15
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        ok_with_config.status,
+        StatusCode::CREATED,
+        "{:?}",
+        ok_with_config.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    assert_eq!(captured.lock().unwrap()[1].2["config"]["language"], "pt-BR");
+    assert_eq!(captured.lock().unwrap()[1].2["config"]["count"], 15);
 
     // Create a note with both original and typed representations.
     let typed_doc = json!({
@@ -1381,6 +1487,44 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
         .await
         .unwrap();
     assert_eq!(files_after_first, files_before + 2);
+
+    // Attempting handoff with note_original that has only non-text items (image/strokes) fails with 422 empty_note_source.
+    let calls_before_empty = captured.lock().unwrap().len();
+    let img_only_note = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-img-only",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": with_image("file-a-ready")}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(img_only_note.status, StatusCode::CREATED);
+    let img_note_id = img_only_note.body["note_id"].as_str().unwrap();
+
+    let empty_extracted = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{img_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Empty Extracted Text",
+            "sources": [{"kind": "note_original"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        empty_extracted.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        empty_extracted.body
+    );
+    assert_eq!(empty_extracted.body["code"], "empty_note_source");
+    assert_eq!(captured.lock().unwrap().len(), calls_before_empty);
 
     // Repeating the same note_original + note_typed handoff dedups against existing ready files (no new FSM uploads).
     let mixed_repeat = call(
