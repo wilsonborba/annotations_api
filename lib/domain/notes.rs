@@ -1384,8 +1384,12 @@ enum PendingPreparedSource {
 
 /// Server-to-server handoff from Notes to Certifications `POST /studies/prepared`.
 /// Resolves owned ready `files` rows or materializes `note_original`/`note_typed`
-/// text revisions into deduped FSM storage, checks `expected_revision`, validates
-/// selections, and forwards `x-uuid` + `CERTIFICATIONS_SERVICE_KEY` server-side.
+/// text revisions as text-only source snapshots with exact saved revision provenance
+/// (not entire note preservation). Non-text content (such as ink strokes, images, and cards)
+/// is excluded from this text snapshot per H3 explicit eligible subset semantics.
+/// Empty materializations are rejected with 422 `empty_note_source` before effects.
+/// Validates expected_revision, checks selection grammar, and forwards `x-uuid` +
+/// `CERTIFICATIONS_SERVICE_KEY` server-side.
 pub async fn create_prepared_certification_study(
     store: &Store,
     owner: &str,

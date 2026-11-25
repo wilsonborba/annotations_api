@@ -1556,4 +1556,88 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
             .await
             .unwrap();
     assert_eq!(files_after_repeat, files_after_first);
+
+    // Mixed document with text, ink strokes, images, and group proves only text subset is materialized.
+    let mixed_doc = json!({
+        "page": {"width": 1000, "background": {"kind": "blank"}},
+        "items": [
+            {"id": "t1", "kind": "text", "x": 0, "y": 0, "width": 160, "height": 80,
+             "spans": [{"text": "First chapter on cellular respiration."}]},
+            {"id": "s1", "kind": "stroke", "tool": "round", "brush_version": 1,
+             "width": 2.5, "color": "#000000FF", "opacity": 1,
+             "samples": {"count": 2, "data": "AQCAGYDIAYCWAcAlABA"},
+             "nodes": [
+                 {"x": 1600, "y": 9600, "mode": "smooth", "corner": false, "sample": 0},
+                 {"x": 14400, "y": 12000, "mode": "smooth", "corner": false, "sample": 1}
+             ]},
+            {"id": "t2", "kind": "text", "x": 240, "y": 0, "width": 160, "height": 80,
+             "spans": [{"text": "Second chapter on oxidative phosphorylation."}]},
+            {"id": "i1", "kind": "image", "x": 480, "y": 0, "width": 160, "height": 80, "file_id": "file-a-ready"},
+            {"id": "g1", "kind": "group", "members": ["t1", "s1"]}
+        ]
+    });
+    let mixed_content_note = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-mixed-content-subset",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": mixed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        mixed_content_note.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_content_note.body
+    );
+    let mixed_c_id = mixed_content_note.body["note_id"].as_str().unwrap();
+
+    let mixed_c_study = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_c_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Cellular Biology Study",
+            "description": "Subset text extraction test",
+            "sources": [{"kind": "note_original"}],
+            "config": {"language": "pt-BR", "count": 15}
+        })),
+    )
+    .await;
+    assert_eq!(
+        mixed_c_study.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_c_study.body
+    );
+    let payload = {
+        let calls = captured.lock().unwrap();
+        calls.last().unwrap().2.clone()
+    };
+    assert_eq!(payload["title"], "Cellular Biology Study");
+    assert_eq!(payload["config"]["language"], "pt-BR");
+    assert_eq!(payload["config"]["count"], 15);
+    assert_eq!(payload["sources"].as_array().unwrap().len(), 1);
+    use sha2::{Digest, Sha256};
+    let fsm_ref = payload["sources"][0]["fsm_ref"].as_str().unwrap();
+    let expected_text =
+        "First chapter on cellular respiration.\nSecond chapter on oxidative phosphorylation.\n";
+    let expected_sha = format!("{:x}", Sha256::digest(expected_text.as_bytes()));
+    assert_eq!(payload["sources"][0]["sha256"], expected_sha);
+    assert!(!fsm_ref.is_empty());
+
+    let file_row =
+        sqlx::query("SELECT filename, content_type, sha256 FROM files WHERE fsm_reference=$1")
+            .bind(fsm_ref)
+            .fetch_one(&store.db)
+            .await
+            .unwrap();
+    let sha: String = file_row.get("sha256");
+    assert_eq!(sha, expected_sha);
 }
