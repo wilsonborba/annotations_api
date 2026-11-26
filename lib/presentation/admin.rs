@@ -202,14 +202,21 @@ async fn note_remove(
     Query(p): Query<DeleteParams>,
     headers: HeaderMap,
 ) -> Result<StatusCode, NoteError> {
+    if p.delete_owned_reports.as_deref() == Some("true") {
+        return Err(NoteError::invalid(
+            "reports_cascade_unavailable",
+            "Admin delete does not cascade owned Reports items",
+        ));
+    }
     let expected = if_match(&headers)?;
     let owner = admin::note_owner(&app.store, &note_id).await?;
-    notes::delete(
+    let _ = notes::delete(
         &app.store,
         &owner,
         &note_id,
         expected,
         p.delete_owned_reports.as_deref(),
+        &[],
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
