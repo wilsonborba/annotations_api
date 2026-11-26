@@ -1040,6 +1040,38 @@ fn map_reports_err(err: crate::core::Error, fallback_msg: &str) -> NoteError {
     }
 }
 
+async fn lock_report_note(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    owner: &str,
+    note_id: &str,
+) -> R<()> {
+    // The same row admission lock used by note deletion, including SQLite fixtures.
+    let locked =
+        sqlx::query("UPDATE notes SET updated_at=updated_at WHERE note_id=$1 AND owner_id=$2")
+            .bind(note_id)
+            .bind(owner)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+    if locked != 1 {
+        return Err(NoteError::not_found());
+    }
+    Ok(())
+}
+
+fn validate_report_receipt(receipt: &sqlx::any::AnyRow, project: &str, digest: &str) -> R<()> {
+    if receipt.get::<String, _>("project") != project
+        || receipt.get::<String, _>("request_digest") != digest
+    {
+        return Err(NoteError::new(
+            StatusCode::CONFLICT,
+            "operation_key_conflict",
+            "operation_key was already used with a different project or item payload",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn register_report_reference(
     store: &Store,
     owner: &str,
@@ -1067,13 +1099,12 @@ pub async fn register_report_reference(
         let item_payload = input.item.ok_or_else(|| {
             NoteError::invalid("invalid_report_item", "item payload is required for create")
         })?;
-        let op_key = input
+        let requested_op_key = input
             .operation_key
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty() && s.len() <= 128)
-            .map(str::to_string)
-            .unwrap_or_else(core::id);
+            .map(str::to_string);
         let request_digest = {
             use sha2::{Digest, Sha256};
             let canonical = serde_json::to_vec(&item_payload).unwrap_or_default();
@@ -1089,7 +1120,26 @@ pub async fn register_report_reference(
         };
         let minted_idem_key = core::id();
         let now = core::now();
-        let inserted = sqlx::query(
+        let mut admission = store.db.begin().await?;
+        lock_report_note(&mut admission, owner, note_id).await?;
+        // A keyless retry can recover its unknown outcome using the same
+        // validated request, without guessing or exposing the remote key.
+        let op_key = if let Some(key) = requested_op_key {
+            key
+        } else {
+            sqlx::query(
+                "SELECT operation_key FROM note_report_create_receipts WHERE note_id=$1 AND owner_id=$2 AND project=$3 AND request_digest=$4 AND status='pending' ORDER BY updated_at, operation_key LIMIT 1",
+            )
+            .bind(note_id)
+            .bind(owner)
+            .bind(project)
+            .bind(&request_digest)
+            .fetch_optional(&mut *admission)
+            .await?
+            .map(|row| row.get("operation_key"))
+            .unwrap_or_else(core::id)
+        };
+        sqlx::query(
             "INSERT INTO note_report_create_receipts(note_id,owner_id,operation_key,idempotency_key,project,request_digest,report_item_id,status,updated_at)
              VALUES($1,$2,$3,$4,$5,$6,'','pending',$7)
              ON CONFLICT(note_id,owner_id,operation_key) DO NOTHING",
@@ -1101,41 +1151,105 @@ pub async fn register_report_reference(
         .bind(project)
         .bind(&request_digest)
         .bind(now)
-        .execute(&store.db)
-        .await?
-        .rows_affected();
-
-        let server_idem_key = if inserted == 1 {
-            minted_idem_key
-        } else {
-            let receipt = sqlx::query(
-                "SELECT idempotency_key, project, request_digest FROM note_report_create_receipts
-                 WHERE note_id=$1 AND owner_id=$2 AND operation_key=$3",
-            )
+        .execute(&mut *admission)
+        .await?;
+        let receipt_query =
+            "SELECT idempotency_key, project, request_digest, report_item_id, status FROM note_report_create_receipts
+             WHERE note_id=$1 AND owner_id=$2 AND operation_key=$3";
+        let receipt = sqlx::query(receipt_query)
             .bind(note_id)
             .bind(owner)
             .bind(&op_key)
-            .fetch_one(&store.db)
+            .fetch_one(&mut *admission)
             .await?;
-            let stored_project: String = receipt.get("project");
-            let stored_digest: String = receipt.get("request_digest");
-            if stored_project != project || stored_digest != request_digest {
-                return Err(NoteError::new(
+        validate_report_receipt(&receipt, project, &request_digest)?;
+        if receipt.get::<String, _>("status") == "rejected" {
+            sqlx::query(
+                "UPDATE note_report_create_receipts SET status='pending', updated_at=$1 WHERE note_id=$2 AND owner_id=$3 AND operation_key=$4",
+            )
+            .bind(now)
+            .bind(note_id)
+            .bind(owner)
+            .bind(&op_key)
+            .execute(&mut *admission)
+            .await?;
+        }
+        // Commit the recovery key before any remote effect can occur.
+        admission.commit().await?;
+
+        // Serialize the bounded remote request and local registration against
+        // note deletion. A lost reply leaves the committed pending receipt.
+        let mut tx = store.db.begin().await?;
+        lock_report_note(&mut tx, owner, note_id).await?;
+        let receipt = sqlx::query(receipt_query)
+            .bind(note_id)
+            .bind(owner)
+            .bind(&op_key)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| {
+                NoteError::new(
                     StatusCode::CONFLICT,
                     "operation_key_conflict",
-                    "operation_key was already used with a different project or item payload",
+                    "The creation receipt changed; retry the request",
+                )
+            })?;
+        validate_report_receipt(&receipt, project, &request_digest)?;
+        if receipt.get::<String, _>("status") == "rejected" {
+            return Err(NoteError::invalid(
+                "invalid_report_item",
+                "Reports rejected this request; retry the matching operation",
+            ));
+        }
+        let server_idem_key: String = receipt.get("idempotency_key");
+        let recorded = receipt.get::<String, _>("status") == "recorded";
+        let recorded_item_id: String = receipt.get("report_item_id");
+        let result = if recorded {
+            // Reports deletes its idempotency row with the item. Never POST a
+            // recorded operation again and accidentally recreate a deleted item.
+            store
+                .reports
+                .owned_item_metadata(owner, &recorded_item_id)
+                .await
+        } else {
+            store
+                .reports
+                .create_owned_item(owner, project, &server_idem_key, item_payload)
+                .await
+        };
+        let meta = match result {
+            Ok(meta) => meta,
+            Err(error) => {
+                if !recorded
+                    && matches!(
+                        error.0,
+                        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+                    )
+                {
+                    // Preserve this operation's binding even after a definite
+                    // validation rejection. It does not block note deletion.
+                    sqlx::query(
+                        "UPDATE note_report_create_receipts SET status='rejected' WHERE note_id=$1 AND owner_id=$2 AND operation_key=$3 AND status='pending'",
+                    )
+                    .bind(note_id)
+                    .bind(owner)
+                    .bind(&op_key)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                }
+                return Err(map_reports_err(
+                    error,
+                    "Reports service could not create item",
                 ));
             }
-            receipt.get("idempotency_key")
         };
-
-        let meta = store
-            .reports
-            .create_owned_item(owner, project, &server_idem_key, item_payload)
-            .await
-            .map_err(|e| map_reports_err(e, "Reports service could not create item"))?;
-
-        let mut tx = store.db.begin().await?;
+        if meta.project != project || (recorded && meta.id != recorded_item_id) {
+            return Err(map_reports_err(
+                Error::unavailable(),
+                "Reports returned metadata for a different project",
+            ));
+        }
         let res = sqlx::query(
             "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at)
              VALUES($1,$2,$3,'created_for_note',$4,$4)
@@ -1410,6 +1524,23 @@ pub async fn delete(
             Some(r) => NoteError::conflict(r.get("revision")),
             None => NoteError::not_found(),
         });
+    }
+    // A cascade must reconcile unknown creations before snapshotting its
+    // deletion set. The existing keep-Reports choice may still delete the note.
+    if cascade && sqlx::query(
+        "SELECT 1 FROM note_report_create_receipts WHERE note_id=$1 AND owner_id=$2 AND status='pending' LIMIT 1",
+    )
+    .bind(note_id)
+    .bind(owner)
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some()
+    {
+        return Err(NoteError::new(
+            StatusCode::CONFLICT,
+            "report_creation_pending",
+            "Retry the pending Reports creation before deleting this note",
+        ));
     }
     let documents: Vec<String> =
         sqlx::query("SELECT document_id FROM note_revisions WHERE note_id=$1")

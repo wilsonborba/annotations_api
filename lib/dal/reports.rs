@@ -45,6 +45,11 @@ pub trait ReportsClient: Send + Sync {
         owner: &'a str,
         item_id: &'a str,
     ) -> BoxFuture<'a, Result<()>>;
+    fn owned_item_metadata<'a>(
+        &'a self,
+        owner: &'a str,
+        item_id: &'a str,
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>>;
     fn delete_owned_item<'a>(
         &'a self,
         owner: &'a str,
@@ -56,6 +61,13 @@ pub trait ReportsClient: Send + Sync {
 pub struct DisabledReports;
 
 impl ReportsClient for DisabledReports {
+    fn owned_item_metadata<'a>(
+        &'a self,
+        _owner: &'a str,
+        _item_id: &'a str,
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
+        Box::pin(async { Err(Error::unavailable()) })
+    }
     fn create_owned_item<'a>(
         &'a self,
         _owner: &'a str,
@@ -151,6 +163,41 @@ fn parse_created_metadata(parsed: &Value, fallback_project: &str) -> Result<Crea
 }
 
 impl ReportsClient for HttpReports {
+    fn owned_item_metadata<'a>(
+        &'a self,
+        owner: &'a str,
+        item_id: &'a str,
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
+        Box::pin(async move {
+            let resp = self
+                .http
+                .get(format!("{}/me/items/{}", self.base_url, item_id))
+                .header("x-uuid", owner)
+                .send()
+                .await
+                .map_err(|_| Error::unavailable())?;
+            let status = resp.status();
+            let body = read_bounded_body(resp, MAX_REPORTS_RESPONSE_BYTES).await?;
+            match status {
+                StatusCode::OK => {
+                    let parsed: Value =
+                        serde_json::from_slice(&body).map_err(|_| Error::unavailable())?;
+                    let item = parsed.get("item").unwrap_or(&parsed);
+                    if item.get("owner_id").and_then(Value::as_str) != Some(owner) {
+                        return Err(Error::unavailable());
+                    }
+                    let meta = parse_created_metadata(&parsed, "")?;
+                    if meta.id != item_id {
+                        return Err(Error::unavailable());
+                    }
+                    Ok(meta)
+                }
+                StatusCode::FORBIDDEN => Err(Error(StatusCode::FORBIDDEN, "forbidden".into())),
+                StatusCode::NOT_FOUND => Err(Error::missing()),
+                _ => Err(Error::unavailable()),
+            }
+        })
+    }
     fn create_owned_item<'a>(
         &'a self,
         owner: &'a str,
@@ -242,9 +289,23 @@ impl ReportsClient for HttpReports {
                 .await
                 .map_err(|_| Error::unavailable())?;
             let status = resp.status();
-            let _ = read_bounded_body(resp, MAX_REPORTS_RESPONSE_BYTES).await?;
+            let body = read_bounded_body(resp, MAX_REPORTS_RESPONSE_BYTES).await?;
             match status {
-                StatusCode::OK | StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
+                StatusCode::OK => {
+                    #[derive(Deserialize)]
+                    struct DeleteOutcome {
+                        deleted: bool,
+                        requires_confirmation: bool,
+                    }
+                    let outcome: DeleteOutcome =
+                        serde_json::from_slice(&body).map_err(|_| Error::unavailable())?;
+                    match (outcome.deleted, outcome.requires_confirmation) {
+                        (true, false) => Ok(()),
+                        (false, true) => Err(Error::conflict("reused_confirmation_required")),
+                        _ => Err(Error::unavailable()),
+                    }
+                }
+                StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
                 StatusCode::CONFLICT => Err(Error::conflict("reused_confirmation_required")),
                 StatusCode::FORBIDDEN => Err(Error(StatusCode::FORBIDDEN, "forbidden".into())),
                 _ => Err(Error::unavailable()),
@@ -299,6 +360,26 @@ impl MockReports {
 }
 
 impl ReportsClient for MockReports {
+    fn owned_item_metadata<'a>(
+        &'a self,
+        owner: &'a str,
+        item_id: &'a str,
+    ) -> BoxFuture<'a, Result<CreatedReportMetadata>> {
+        Box::pin(async move {
+            match self.items.lock().unwrap().get(item_id) {
+                Some(actual_owner) if actual_owner == owner => {}
+                Some(_) => return Err(Error(StatusCode::FORBIDDEN, "forbidden".into())),
+                None => return Err(Error::missing()),
+            }
+            self.idempotency
+                .lock()
+                .unwrap()
+                .values()
+                .find(|meta| meta.id == item_id)
+                .cloned()
+                .ok_or_else(Error::missing)
+        })
+    }
     fn create_owned_item<'a>(
         &'a self,
         owner: &'a str,
@@ -392,6 +473,10 @@ impl ReportsClient for MockReports {
             match items.get(item_id) {
                 Some(real_owner) if real_owner == owner => {
                     items.remove(item_id);
+                    self.idempotency
+                        .lock()
+                        .unwrap()
+                        .retain(|_, meta| meta.id != item_id);
                     Ok(())
                 }
                 Some(_) => Err(Error(StatusCode::FORBIDDEN, "forbidden".into())),

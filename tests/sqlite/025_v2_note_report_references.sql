@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS note_report_create_receipts (
     project TEXT NOT NULL DEFAULT '',
     request_digest TEXT NOT NULL DEFAULT '',
     report_item_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL CHECK (status IN ('pending', 'recorded')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'recorded', 'rejected')),
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (note_id, owner_id, operation_key)
 );

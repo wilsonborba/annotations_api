@@ -1492,7 +1492,10 @@ async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
                             ),
                             Some(_) => {
                                 map.remove(&id);
-                                (StatusCode::OK, Json(json!({"deleted": true})))
+                                (
+                                    StatusCode::OK,
+                                    Json(json!({"deleted": true, "requires_confirmation": false})),
+                                )
                             }
                             None => (StatusCode::NOT_FOUND, Json(json!({"error": "missing"}))),
                         }
