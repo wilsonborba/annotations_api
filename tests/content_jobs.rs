@@ -3,7 +3,7 @@ use annotations_api::{
     core::Result as CoreResult,
     dal::{
         Store,
-        cortex::{BoxFuture, CortexClient, CortexOutput, OutputStatus},
+        cortex::{BoxFuture, CortexClient, CortexOutput, OutputStatus, StartedChat},
     },
     domain::App,
     presentation,
@@ -30,6 +30,10 @@ struct MockCortex {
     starts: AtomicUsize,
     deletes: AtomicUsize,
     allow_finish: Notify,
+    start_entered: AtomicBool,
+    release_start: Notify,
+    gate_start: AtomicBool,
+    return_immediate: AtomicBool,
     fail_delete: AtomicBool,
     draft_was_saved_before_delete: AtomicBool,
     store_ref: std::sync::Mutex<Option<Store>>,
@@ -42,6 +46,10 @@ impl MockCortex {
             starts: AtomicUsize::new(0),
             deletes: AtomicUsize::new(0),
             allow_finish: Notify::new(),
+            start_entered: AtomicBool::new(false),
+            release_start: Notify::new(),
+            gate_start: AtomicBool::new(false),
+            return_immediate: AtomicBool::new(false),
             fail_delete: AtomicBool::new(false),
             draft_was_saved_before_delete: AtomicBool::new(false),
             store_ref: std::sync::Mutex::new(None),
@@ -70,10 +78,25 @@ impl CortexClient for MockCortex {
         _owner: &'a str,
         _text: &'a str,
         _file_ids: Vec<String>,
-    ) -> BoxFuture<'a, CoreResult<(String, String)>> {
+    ) -> BoxFuture<'a, CoreResult<StartedChat>> {
         Box::pin(async move {
             let n = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
-            Ok((format!("cx-sess-{n}"), format!("cx-out-{n}")))
+            if self.gate_start.load(Ordering::SeqCst) {
+                self.start_entered.store(true, Ordering::SeqCst);
+                self.release_start.notified().await;
+            }
+            Ok(StartedChat {
+                session_id: format!("cx-sess-{n}"),
+                output_id: format!("cx-out-{n}"),
+                immediate_output: self.return_immediate.load(Ordering::SeqCst).then(|| {
+                    CortexOutput {
+                        status: OutputStatus::Completed,
+                        text: "Synchronous result after cancellation".into(),
+                        error_code: None,
+                        error_message: None,
+                    }
+                }),
+            })
         })
     }
     fn get_output<'a>(
@@ -116,15 +139,15 @@ impl CortexClient for MockCortex {
             self.deletes.fetch_add(1, Ordering::SeqCst);
             let store = self.store_ref.lock().unwrap().clone();
             if let Some(store) = store {
-                let saved: i64 = sqlx::query_scalar(
+                let saved: Option<i64> = sqlx::query_scalar(
                     "SELECT draft_saved FROM content_jobs WHERE cortex_session_id=$1",
                 )
                 .bind(session_id)
-                .fetch_one(&store.db)
+                .fetch_optional(&store.db)
                 .await
                 .unwrap();
                 self.draft_was_saved_before_delete
-                    .store(saved == 1, Ordering::SeqCst);
+                    .store(saved == Some(1), Ordering::SeqCst);
             }
             if self.fail_delete.load(Ordering::SeqCst) {
                 return Err(annotations_api::core::Error::unavailable());
@@ -402,6 +425,115 @@ async fn cancel_preserves_partial_draft_and_leaves_note_unchanged() {
 }
 
 #[tokio::test]
+async fn cancellation_during_synchronous_start_cleans_remote_without_orphan_or_late_events() {
+    let cortex = MockCortex::new();
+    cortex.gate_start.store(true, Ordering::SeqCst);
+    cortex.return_immediate.store(true, Ordering::SeqCst);
+    let (store, router) = setup(cortex.clone()).await;
+
+    let (status, started) = call(
+        &router,
+        "POST",
+        "/me/content_jobs",
+        Some(A),
+        Some(json!({
+            "client_job_id": "job-cancel-sync-start",
+            "kind": "extraction",
+            "text": "Run synchronously"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let job_id = started["job_id"].as_str().unwrap().to_string();
+
+    for _ in 0..100 {
+        if cortex.start_entered.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(cortex.start_entered.load(Ordering::SeqCst));
+
+    let (cancel_status, cancelled) = call(
+        &router,
+        "DELETE",
+        &format!("/me/content_jobs/{job_id}/execution"),
+        Some(A),
+        None,
+    )
+    .await;
+    assert_eq!(cancel_status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["draft_saved"], false);
+    assert_eq!(cancelled["cortex_session_id"], Value::Null);
+    assert_eq!(cancelled["cortex_cleaned"], false);
+
+    cortex.release_start.notify_one();
+    for _ in 0..100 {
+        let (_, current) = call(
+            &router,
+            "GET",
+            &format!("/me/content_jobs/{job_id}"),
+            Some(A),
+            None,
+        )
+        .await;
+        if current["cortex_cleaned"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    let (_, final_job) = call(
+        &router,
+        "GET",
+        &format!("/me/content_jobs/{job_id}"),
+        Some(A),
+        None,
+    )
+    .await;
+    assert_eq!(final_job["status"], "cancelled");
+    assert_eq!(final_job["draft_saved"], false);
+    assert_eq!(final_job["cortex_session_id"], "cx-sess-1");
+    assert_eq!(final_job["cortex_output_id"], "cx-out-1");
+    assert_eq!(final_job["cortex_cleaned"], true);
+    let stages: Vec<String> =
+        sqlx::query_scalar("SELECT stage FROM content_job_events WHERE job_id=$1 ORDER BY seq")
+            .bind(&job_id)
+            .fetch_all(&store.db)
+            .await
+            .unwrap();
+    assert_eq!(stages, ["queued", "cancelled"]);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/me/content_jobs/{job_id}/events?after=0"))
+                .header("x-uuid", A)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let event_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let event_body = String::from_utf8(event_body.to_vec()).unwrap();
+    assert!(event_body.contains("event: cancelled"));
+    assert!(!event_body.contains("event: running"));
+    assert!(!event_body.contains("event: completed"));
+    assert!(
+        store
+            .docs
+            .get(&format!("content-job-draft-{job_id}"))
+            .await
+            .is_err()
+    );
+    assert_eq!(cortex.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn server_restart_resumes_started_job_without_second_cortex_call_and_fails_unstarted_job() {
     let cortex = MockCortex::new();
     let (store, router) = setup(cortex.clone()).await;
@@ -483,4 +615,129 @@ async fn server_restart_resumes_started_job_without_second_cortex_call_and_fails
     assert_eq!(cortex.uploads.load(Ordering::SeqCst), 0);
     assert_eq!(cortex.starts.load(Ordering::SeqCst), 0);
     assert_eq!(cortex.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn http_cortex_temporary_sync_201_result_persists_even_when_history_returns_404() {
+    use annotations_api::dal::cortex::HttpCortex;
+    use axum::{
+        Json,
+        extract::Path,
+        http::HeaderMap,
+        routing::{delete, get, post},
+    };
+
+    let history_hits = Arc::new(AtomicUsize::new(0));
+    let history_hits_srv = history_hits.clone();
+    let delete_hits = Arc::new(AtomicUsize::new(0));
+    let delete_hits_srv = delete_hits.clone();
+
+    let fake_cortex = Router::new()
+        .route(
+            "/files",
+            post(|| async {
+                (
+                    StatusCode::CREATED,
+                    Json(json!({"file_id": "cx-temp-file-1"})),
+                )
+            }),
+        )
+        .route(
+            "/chats",
+            post(
+                |headers: HeaderMap, Json(payload): Json<Value>| async move {
+                    assert_eq!(headers.get("x-uuid").unwrap(), A);
+                    assert_eq!(payload["temporary"], true);
+                    assert_eq!(payload["use_memory"], false);
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "session_id": "tmp-sess-1",
+                            "output_id": "tmp-out-1",
+                            "status": "done",
+                            "text": "Immediate temporary summary"
+                        })),
+                    )
+                },
+            ),
+        )
+        .route(
+            "/chats/{sid}/outputs/{oid}",
+            get(move |Path((_sid, _oid)): Path<(String, String)>| {
+                let hits = history_hits_srv.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    // Temporary outputs intentionally have no history/reconnect route.
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "temporary_output_not_persisted"})),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/chats/{sid}",
+            delete(move |Path(_sid): Path<String>| {
+                let dels = delete_hits_srv.clone();
+                async move {
+                    dels.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, fake_cortex).await.unwrap();
+    });
+
+    let mock = MockCortex::new();
+    let (mut store, _) = setup(mock).await;
+    store.cortex = HttpCortex::client(format!("http://{addr}"), reqwest::Client::new());
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let fid = upload_ready_text(&router, A, b"Temp source text").await;
+
+    // Start job via public Notes route.
+    let (st, started) = call(
+        &router,
+        "POST",
+        "/me/content_jobs",
+        Some(A),
+        Some(json!({
+            "client_job_id": "job-tmp-1",
+            "kind": "study_notes",
+            "text": "Summarize this",
+            "file_ids": [fid]
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{started}");
+    let job_id = started["job_id"].as_str().unwrap();
+
+    let mut final_job = json!({});
+    for _ in 0..40 {
+        let (st_g, cur) = call(
+            &router,
+            "GET",
+            &format!("/me/content_jobs/{job_id}"),
+            Some(A),
+            None,
+        )
+        .await;
+        assert_eq!(st_g, StatusCode::OK);
+        if matches!(cur["status"].as_str(), Some("completed" | "failed")) {
+            final_job = cur;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+    assert_eq!(final_job["status"], "completed", "{final_job}");
+    assert_eq!(final_job["draft_saved"], true);
+    assert_eq!(final_job["draft"]["text"], "Immediate temporary summary");
+    assert_eq!(history_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(delete_hits.load(Ordering::SeqCst), 1);
 }

@@ -24,6 +24,13 @@ pub struct CortexOutput {
     pub error_message: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct StartedChat {
+    pub session_id: String,
+    pub output_id: String,
+    pub immediate_output: Option<CortexOutput>,
+}
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait CortexClient: Send + Sync {
@@ -40,7 +47,7 @@ pub trait CortexClient: Send + Sync {
         owner: &'a str,
         text: &'a str,
         file_ids: Vec<String>,
-    ) -> BoxFuture<'a, Result<(String, String)>>;
+    ) -> BoxFuture<'a, Result<StartedChat>>;
     fn get_output<'a>(
         &'a self,
         owner: &'a str,
@@ -75,7 +82,7 @@ impl CortexClient for DisabledCortex {
         _: &'a str,
         _: &'a str,
         _: Vec<String>,
-    ) -> BoxFuture<'a, Result<(String, String)>> {
+    ) -> BoxFuture<'a, Result<StartedChat>> {
         Box::pin(async { Err(disabled()) })
     }
     fn get_output<'a>(
@@ -128,7 +135,7 @@ impl HttpCortex {
 fn parse_output(body: &Value) -> Result<CortexOutput> {
     let data = body.get("data").unwrap_or(body);
     let status = match data["status"].as_str().unwrap_or("running") {
-        "completed" => OutputStatus::Completed,
+        "done" | "completed" => OutputStatus::Completed,
         "partial" => OutputStatus::Partial,
         "cancelled" => OutputStatus::Cancelled,
         "failed" | "error" => OutputStatus::Failed,
@@ -196,7 +203,7 @@ impl CortexClient for HttpCortex {
         owner: &'a str,
         text: &'a str,
         file_ids: Vec<String>,
-    ) -> BoxFuture<'a, Result<(String, String)>> {
+    ) -> BoxFuture<'a, Result<StartedChat>> {
         Box::pin(async move {
             let payload = json!({
                 "app_id": "annotations",
@@ -229,7 +236,13 @@ impl CortexClient for HttpCortex {
                 .as_str()
                 .map(String::from)
                 .ok_or_else(Error::unavailable)?;
-            Ok((session_id, output_id))
+            let parsed = parse_output(&body)?;
+            let immediate_output = (parsed.status != OutputStatus::Running).then_some(parsed);
+            Ok(StartedChat {
+                session_id,
+                output_id,
+                immediate_output,
+            })
         })
     }
     fn get_output<'a>(
