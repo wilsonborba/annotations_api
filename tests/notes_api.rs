@@ -1749,6 +1749,27 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     assert_eq!(n1.status, StatusCode::CREATED, "{}", n1.body);
     let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
 
+    // Retry is unavailable before deletion, including for the current owner.
+    // A missing UUID also must not receive the default note_deleted=true result.
+    for (who, target) in [(B, n1_id.as_str()), (A, "missing-retry-note")] {
+        let r = call(
+            &router,
+            "POST",
+            &format!("/me/notes/{target}/reports/retry-cleanup"),
+            Some(who),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::NOT_FOUND,
+            "{who} {target}: {:?}",
+            r.body
+        );
+    }
+    assert!(mock_reports.delete_calls().is_empty());
+
     let n2 = create(
         &router,
         A,
@@ -1994,6 +2015,22 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     assert_eq!(retry.status, StatusCode::OK);
     assert_eq!(retry.body["deleted_report_ids"], json!([rep_fail]));
     assert_eq!(retry.body["failed_report_deletions"], json!([]));
+
+    // Durable deletion evidence preserves the established idempotent retry.
+    let completed_calls = mock_reports.delete_calls();
+    let repeated_retry = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports/retry-cleanup"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(repeated_retry.status, StatusCode::OK);
+    assert_eq!(repeated_retry.body["note_deleted"], true);
+    assert_eq!(repeated_retry.body["deleted_report_ids"], json!([]));
+    assert_eq!(mock_reports.delete_calls(), completed_calls);
 
     // Scoped explicit confirmation: create on n3, reuse on n2, delete n3 WITH confirm_reused_report_ids -> deleted with confirm=true!
     let n3 = create(
