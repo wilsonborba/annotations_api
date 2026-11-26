@@ -299,14 +299,17 @@ pub async fn create(store: &Store, owner: &str, raw: &[u8]) -> R<(Value, bool)> 
     Ok((get(store, owner, &job_id).await?, true))
 }
 
-async fn append_event(store: &Store, job_id: &str, stage: &str) -> R<()> {
+async fn append_event_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    job_id: &str,
+    stage: &str,
+) -> R<()> {
     let now = core::now();
-    let mut tx = store.db.begin().await?;
     let next_seq: i64 = sqlx::query(
         "SELECT COALESCE(MAX(seq),0)+1 AS next_seq FROM content_job_events WHERE job_id=$1",
     )
     .bind(job_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?
     .get("next_seq");
     sqlx::query("INSERT INTO content_job_events(job_id,seq,stage,created_at) VALUES($1,$2,$3,$4)")
@@ -314,15 +317,14 @@ async fn append_event(store: &Store, job_id: &str, stage: &str) -> R<()> {
         .bind(next_seq)
         .bind(stage)
         .bind(now)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("UPDATE content_jobs SET event_cursor=$1,updated_at=$2 WHERE job_id=$3")
         .bind(next_seq)
         .bind(now)
         .bind(job_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -360,12 +362,20 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
 
     let mut cortex_file_ids = Vec::new();
     if !file_rows.is_empty() {
-        sqlx::query("UPDATE content_jobs SET status='uploading',updated_at=$1 WHERE job_id=$2 AND status='queued'")
+        let mut tx = store.db.begin().await?;
+        let changed = sqlx::query("UPDATE content_jobs SET status='uploading',updated_at=$1 WHERE job_id=$2 AND status='queued'")
             .bind(core::now())
             .bind(job_id)
-            .execute(&store.db)
-            .await?;
-        append_event(store, job_id, "uploading").await?;
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if changed == 1 {
+            append_event_tx(&mut tx, job_id, "uploading").await?;
+        }
+        tx.commit().await?;
+        if changed == 0 {
+            return Ok(());
+        }
     }
     for frow in file_rows {
         let fid: String = frow.get("file_id");
@@ -442,16 +452,50 @@ async fn run_job(store: &Store, owner: &str, job_id: &str) -> R<()> {
             return fail_job(store, job_id, "cortex_unavailable", "Cortex start failed").await;
         }
     };
-    sqlx::query(
+    let mut tx = store.db.begin().await?;
+    let claimed = sqlx::query(
         "UPDATE content_jobs SET status='running',cortex_session_id=$1,cortex_output_id=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','uploading')",
     )
     .bind(&started.session_id)
     .bind(&started.output_id)
     .bind(core::now())
     .bind(job_id)
-    .execute(&store.db)
-    .await?;
-    append_event(store, job_id, "running").await?;
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if claimed == 1 {
+        append_event_tx(&mut tx, job_id, "running").await?;
+    }
+    tx.commit().await?;
+
+    if claimed == 0 {
+        // Cancellation can win while synchronous Cortex start is in flight. Keep
+        // the returned remote IDs for cleanup, but do not revive the job or save
+        // its result after the owner cancelled it.
+        sqlx::query(
+            "UPDATE content_jobs SET cortex_session_id=$1,cortex_output_id=$2,updated_at=$3 WHERE job_id=$4 AND status='cancelled' AND cortex_session_id IS NULL AND cortex_output_id IS NULL",
+        )
+        .bind(&started.session_id)
+        .bind(&started.output_id)
+        .bind(core::now())
+        .bind(job_id)
+        .execute(&store.db)
+        .await?;
+        if store
+            .cortex
+            .delete_chat(owner, &started.session_id)
+            .await
+            .is_ok()
+        {
+            sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2 AND status='cancelled'")
+                .bind(core::now())
+                .bind(job_id)
+                .execute(&store.db)
+                .await?;
+        }
+        release_files(store, job_id).await?;
+        return Ok(());
+    }
 
     if let Some(immediate) = started.immediate_output {
         finish_job_with_output(store, owner, job_id, &started.session_id, immediate).await
@@ -526,9 +570,39 @@ async fn finish_job_with_output(
         OutputStatus::Running => ("failed", Some("cortex_timeout".into()), None),
     };
 
-    // Validate and store the draft in CouchDB BEFORE deleting the temporary Cortex chat.
-    let (doc_id, schema_name, schema_version, draft_saved) = if !out.text.is_empty() {
-        let (doc_id, version) = save_draft(store, job_id, &out.text).await?;
+    let prepared = if out.text.is_empty() {
+        None
+    } else {
+        Some(prepare_draft(store, &out.text).await?)
+    };
+    let mut tx = store.db.begin().await?;
+    let locked = sqlx::query(
+        "UPDATE content_jobs SET updated_at=$1 WHERE job_id=$2 AND status IN ('queued','uploading','running')",
+    )
+    .bind(core::now())
+    .bind(job_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if locked == 0 {
+        tx.commit().await?;
+        let cleaned: i64 =
+            sqlx::query_scalar("SELECT cortex_cleaned FROM content_jobs WHERE job_id=$1")
+                .bind(job_id)
+                .fetch_one(&store.db)
+                .await?;
+        if cleaned == 0 && store.cortex.delete_chat(owner, session_id).await.is_ok() {
+            sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2")
+                .bind(core::now())
+                .bind(job_id)
+                .execute(&store.db)
+                .await?;
+        }
+        release_files(store, job_id).await?;
+        return Ok(());
+    }
+    let (doc_id, schema_name, schema_version, draft_saved) = if let Some(version) = prepared {
+        let doc_id = put_draft(store, job_id, &out.text, version).await?;
         (Some(doc_id), Some(DRAFT_SCHEMA), Some(version), 1_i64)
     } else {
         (None, None, None, 0_i64)
@@ -545,9 +619,10 @@ async fn finish_job_with_output(
     .bind(&err_msg)
     .bind(core::now())
     .bind(job_id)
-    .execute(&store.db)
+    .execute(&mut *tx)
     .await?;
-    append_event(store, job_id, next_status).await?;
+    append_event_tx(&mut tx, job_id, next_status).await?;
+    tx.commit().await?;
 
     if store.cortex.delete_chat(owner, session_id).await.is_ok() {
         sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2")
@@ -560,7 +635,7 @@ async fn finish_job_with_output(
     Ok(())
 }
 
-async fn save_draft(store: &Store, job_id: &str, text: &str) -> R<(String, i64)> {
+async fn prepare_draft(store: &Store, text: &str) -> R<i64> {
     let (version, fields) = schemas::published_fields(store, DRAFT_SCHEMA, None)
         .await
         .map_err(|e| {
@@ -583,7 +658,15 @@ async fn save_draft(store: &Store, job_id: &str, text: &str) -> R<(String, i64)>
             format!("Draft does not match schema at {path}"),
         ));
     }
+    Ok(version)
+}
+
+async fn put_draft(store: &Store, job_id: &str, text: &str, version: i64) -> R<String> {
     let document_id = format!("{DRAFT_SCHEMA}-{job_id}");
+    let body = json!({
+        "format": "markdown",
+        "text": text,
+    });
     store
         .docs
         .put(
@@ -596,7 +679,7 @@ async fn save_draft(store: &Store, job_id: &str, text: &str) -> R<(String, i64)>
         )
         .await
         .map_err(NoteError::from)?;
-    Ok((document_id, version))
+    Ok(document_id)
 }
 
 /// Resume or truthfully fail unfinished jobs left in `queued`, `uploading`, or `running`
@@ -646,16 +729,21 @@ pub async fn resume_unfinished(store: &Store) -> R<usize> {
 }
 
 async fn fail_job(store: &Store, job_id: &str, code: &str, message: &str) -> R<()> {
-    sqlx::query(
+    let mut tx = store.db.begin().await?;
+    let changed = sqlx::query(
         "UPDATE content_jobs SET status='failed',error_code=$1,error_message=$2,updated_at=$3 WHERE job_id=$4 AND status IN ('queued','uploading','running')",
     )
     .bind(code)
     .bind(message)
     .bind(core::now())
     .bind(job_id)
-    .execute(&store.db)
-    .await?;
-    append_event(store, job_id, "failed").await?;
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 1 {
+        append_event_tx(&mut tx, job_id, "failed").await?;
+    }
+    tx.commit().await?;
     release_files(store, job_id).await?;
     Ok(())
 }
@@ -775,13 +863,32 @@ pub async fn cancel(store: &Store, owner: &str, job_id: &str) -> R<Value> {
     {
         partial_text = out.text;
     }
-    let (doc_id, schema_name, schema_version, draft_saved) = if !partial_text.is_empty() {
-        let (doc_id, version) = save_draft(store, job_id, &partial_text).await?;
+    let prepared = if partial_text.is_empty() {
+        None
+    } else {
+        Some(prepare_draft(store, &partial_text).await?)
+    };
+    let mut tx = store.db.begin().await?;
+    let locked = sqlx::query(
+        "UPDATE content_jobs SET updated_at=$1 WHERE job_id=$2 AND owner_id=$3 AND status IN ('queued','uploading','running')",
+    )
+    .bind(core::now())
+    .bind(job_id)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if locked == 0 {
+        tx.commit().await?;
+        return get(store, owner, job_id).await;
+    }
+    let (doc_id, schema_name, schema_version, draft_saved) = if let Some(version) = prepared {
+        let doc_id = put_draft(store, job_id, &partial_text, version).await?;
         (Some(doc_id), Some(DRAFT_SCHEMA), Some(version), 1_i64)
     } else {
         (None, None, None, 0_i64)
     };
-    let changed = sqlx::query(
+    sqlx::query(
         "UPDATE content_jobs SET status='cancelled',draft_document_id=$1,draft_schema_name=$2,draft_schema_version=$3,draft_saved=$4,updated_at=$5 WHERE job_id=$6 AND owner_id=$7 AND status IN ('queued','uploading','running')",
     )
     .bind(&doc_id)
@@ -791,21 +898,19 @@ pub async fn cancel(store: &Store, owner: &str, job_id: &str) -> R<Value> {
     .bind(core::now())
     .bind(job_id)
     .bind(owner)
-    .execute(&store.db)
-    .await?
-    .rows_affected();
-    if changed == 1 {
-        append_event(store, job_id, "cancelled").await?;
-        if let Some(sid) = session_id
-            && store.cortex.delete_chat(owner, &sid).await.is_ok()
-        {
-            sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2")
-                .bind(core::now())
-                .bind(job_id)
-                .execute(&store.db)
-                .await?;
-        }
-        release_files(store, job_id).await?;
+    .execute(&mut *tx)
+    .await?;
+    append_event_tx(&mut tx, job_id, "cancelled").await?;
+    tx.commit().await?;
+    if let Some(sid) = session_id
+        && store.cortex.delete_chat(owner, &sid).await.is_ok()
+    {
+        sqlx::query("UPDATE content_jobs SET cortex_cleaned=1,updated_at=$1 WHERE job_id=$2")
+            .bind(core::now())
+            .bind(job_id)
+            .execute(&store.db)
+            .await?;
     }
+    release_files(store, job_id).await?;
     get(store, owner, job_id).await
 }
