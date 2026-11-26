@@ -29,6 +29,12 @@
 - *(content-jobs)* Add durable optional Cortex processing jobs (#35)
 - *(tasks)* Add owner task card routes through per-user Plane Slim containers (#36)
 - *(annotations_api#37)* Add created-for-note Reports reference accounting, reuse preview, and retryable cascade deletion
+- *(#35)* Add server-side Notes to Certifications prepared study handoff
+- *(notes)* Complete H3 prepared certification handoff
+- *(notes)* Collect grouped original text and verify full H3 prepared handoff
+- *(notes)* Carry prepared generation config and guard non-text original extraction
+- *(notes)* Verify mixed original text subset extraction and non-default config handoff
+- *(notes)* Attach canonical external_ref origin to prepared study sources
 
 ### 🐛 Bug Fixes
 
@@ -54,6 +60,9 @@
 - *(reports)* Merge explicit note card identity (#43)
 - *(reports)* Serialize note creation and deletion outcomes
 - *(reports)* Integrate reviewed note creation and deletion handling (#37)
+- *(#35)* Persist synchronous temporary Cortex 201 results without polling history
+- Guard content job cancellation during Cortex start
+- *(notes)* Align prepared selection PDF page cap and text-only passages with Cortex
 
 ### 💼 Other
 
@@ -88,6 +97,8 @@
 - *(schemas)* Compact stroke samples and higher note limits (#19)
 - *(schemas)* Compact samples in all fixtures and tests (#19)
 - Hold at least 30 dense handwritten pages in one note (#19)
+- Review preserved synchronous results and cancellation admission
+- Review note-owned prepared certification handoff
 
 ### 🚜 Refactor
 
@@ -110,6 +121,7 @@
 - *(changelog)* Record upload staging folder
 - *(changelog)* Record administrative operations
 - *(changelog)* Record Reports card identity fix (#43)
+- *(changelog)* Record reviewed Reports cleanup integration (#37)
 
 ### 🧪 Testing
 
