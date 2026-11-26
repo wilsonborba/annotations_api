@@ -1190,6 +1190,10 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
         captured.lock().unwrap()[0].2["sources"][0]["fsm_ref"],
         "annotations/a/slides.pdf"
     );
+    assert_eq!(
+        captured.lock().unwrap()[0].2["sources"][0]["external_ref"],
+        "annotations:file:file-a-ready"
+    );
 
     // Reject forged authority fields and malformed selections with zero downstream calls.
     let forged = call(
@@ -1640,6 +1644,68 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
             .unwrap();
     let sha: String = file_row.get("sha256");
     assert_eq!(sha, expected_sha);
+
+    let rev1: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='original'",
+    )
+    .bind(mixed_c_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+    let expected_ext1 = format!("annotations:note:{mixed_c_id}:original:{rev1}");
+    assert_eq!(payload["sources"][0]["external_ref"], expected_ext1);
+
+    // Verify two notes with identical text bytes reuse file bytes but retain distinct per-study external_ref origin.
+    let mixed_c2 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "prep-mixed-2",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": mixed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(mixed_c2.status, StatusCode::CREATED, "{:?}", mixed_c2.body);
+    let mixed_c2_id = mixed_c2.body["note_id"].as_str().unwrap();
+
+    let mixed_c2_study = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_c2_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Cellular Biology Study 2",
+            "description": "Dedupe byte reuse test",
+            "sources": [{"kind": "note_original"}],
+            "config": {"language": "th", "count": 10}
+        })),
+    )
+    .await;
+    assert_eq!(mixed_c2_study.status, StatusCode::CREATED);
+    let payload2 = {
+        let calls = captured.lock().unwrap();
+        calls.last().unwrap().2.clone()
+    };
+    assert_eq!(payload2["title"], "Cellular Biology Study 2");
+    assert_eq!(payload2["config"]["language"], "th");
+    assert_eq!(payload2["config"]["count"], 10);
+    // Verified byte dedupe: identical fsm_ref reuses the existing uploaded file
+    assert_eq!(payload2["sources"][0]["fsm_ref"], fsm_ref);
+    // Verified distinct source origin: retains distinct per-study external_ref with note2 and its revision
+    let rev2: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='original'",
+    )
+    .bind(mixed_c2_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+    let expected_ext2 = format!("annotations:note:{mixed_c2_id}:original:{rev2}");
+    assert_eq!(payload2["sources"][0]["external_ref"], expected_ext2);
+    assert_ne!(expected_ext1, expected_ext2);
 }
 
 #[tokio::test]

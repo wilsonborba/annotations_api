@@ -1998,6 +1998,7 @@ enum PendingPreparedSource {
         sha256: String,
         selection_kind: String,
         selection_spec: String,
+        external_ref: String,
     },
 }
 
@@ -2142,6 +2143,7 @@ pub async fn create_prepared_certification_study(
                 let size_bytes: i64 = r.get("size_bytes");
                 let sha256: String = r.get("sha256");
                 let sel_spec = canonicalize_selection(sel_kind, sel_spec_raw, &mime_type)?;
+                let file_ref = format!("annotations:file:{fid}");
                 pending_sources.push(PendingPreparedSource::Ready(json!({
                     "filename": filename,
                     "mime_type": mime_type,
@@ -2150,6 +2152,7 @@ pub async fn create_prepared_certification_study(
                     "fsm_ref": fsm_ref,
                     "selection_kind": sel_kind,
                     "selection_spec": sel_spec,
+                    "external_ref": file_ref,
                 })));
             }
             "note_original" | "note_typed" => {
@@ -2217,6 +2220,7 @@ pub async fn create_prepared_certification_study(
                 let sha256 = format!("{:x}", Sha256::digest(&bytes));
                 let short_rev: String = revision_id.chars().take(12).collect();
                 let filename = format!("note-{representation}-{short_rev}.txt");
+                let note_ref = format!("annotations:note:{note_id}:{representation}:{revision_id}");
 
                 let existing = sqlx::query(
                     "SELECT filename, content_type, size_bytes, sha256, fsm_reference FROM files WHERE owner_id=$1 AND sha256=$2 AND content_type='text/plain' AND status='ready' AND fsm_reference IS NOT NULL AND fsm_reference <> '' ORDER BY created_at DESC LIMIT 1",
@@ -2234,6 +2238,7 @@ pub async fn create_prepared_certification_study(
                         "fsm_ref": r.get::<String, _>("fsm_reference"),
                         "selection_kind": sel_kind,
                         "selection_spec": sel_spec,
+                        "external_ref": note_ref,
                     })));
                 } else {
                     pending_sources.push(PendingPreparedSource::UploadNoteText {
@@ -2242,6 +2247,7 @@ pub async fn create_prepared_certification_study(
                         sha256,
                         selection_kind: sel_kind.to_string(),
                         selection_spec: sel_spec,
+                        external_ref: note_ref,
                     });
                 }
             }
@@ -2266,6 +2272,7 @@ pub async fn create_prepared_certification_study(
                 sha256,
                 selection_kind,
                 selection_spec,
+                external_ref,
             } => {
                 let (stored_filename, mime_type, size_bytes, fsm_ref) = if let Some(cached) =
                     uploaded_by_sha.get(&sha256)
@@ -2319,6 +2326,7 @@ pub async fn create_prepared_certification_study(
                     "fsm_ref": fsm_ref,
                     "selection_kind": selection_kind,
                     "selection_spec": selection_spec,
+                    "external_ref": external_ref,
                 }));
             }
         }
