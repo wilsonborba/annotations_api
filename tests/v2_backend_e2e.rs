@@ -299,3 +299,191 @@ async fn v2_backend_end_to_end_system_flow_and_security_boundaries() {
     assert_eq!(st, StatusCode::CREATED, "{task_res}");
     assert_eq!(plane_hits.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn owner_note_sync_conflict_publication_and_delete_compose_end_to_end() {
+    let store = Store::fixture().await;
+    seed_schemas(&store).await;
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    // Create both real representations, read the sync feed, and then edit the original.
+    let (status, created) = call(
+        &router,
+        "POST",
+        "/me/notes",
+        Some(OWNER_A),
+        &[],
+        Some(json!({
+            "client_note_id": "e2e-dual-note",
+            "main_representation": "original",
+            "metadata": {"title": "E2E dual representation"},
+            "representations": {
+                "original": {"document": {
+                    "page": {"width": 1000, "background": {"kind": "blank"}},
+                    "items": [{"id": "t1", "kind": "text", "x": 40, "y": 40,
+                        "width": 240, "height": 80, "spans": [{"text": "Original cell note"}]}]
+                }},
+                "typed": {"schema_version": 1, "document": {
+                    "blocks": [{"id": "b1", "kind": "paragraph", "spans": [{"text": "Typed cell note"}]}]
+                }}
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let note_id = created["note_id"].as_str().unwrap().to_string();
+
+    let (status, initial_feed) = call(
+        &router,
+        "GET",
+        "/me/notes?sync_cursor=0",
+        Some(OWNER_A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{initial_feed}");
+    assert_eq!(initial_feed["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(initial_feed["changes"][0]["change"], "upsert");
+    assert_eq!(initial_feed["changes"][0]["note_id"], note_id);
+
+    let uri = format!("/me/notes/{note_id}");
+    let (status, saved) = call(
+        &router,
+        "PATCH",
+        &uri,
+        Some(OWNER_A),
+        &[("if-match", "1")],
+        Some(json!({
+            "original": {"op": "update", "id": "t1", "changes": {"x": 96}}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 2);
+    let (status, conflict) = call(
+        &router,
+        "PATCH",
+        &uri,
+        Some(OWNER_A),
+        &[("if-match", "1")],
+        Some(json!({
+            "original": {"op": "update", "id": "t1", "changes": {"x": 192}}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+
+    let original_rev: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='original'",
+    )
+    .bind(&note_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+    let typed_rev: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='typed'",
+    )
+    .bind(&note_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+
+    // Publish Typed, then both versions, and confirm the public projection changes.
+    let (status, typed_publication) = call(
+        &router,
+        "PUT",
+        &format!("/me/notes/{note_id}/publication"),
+        Some(OWNER_A),
+        &[("if-match", "0")],
+        Some(json!({"language": "en", "representations": {"typed": typed_rev}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{typed_publication}");
+    let (status, public_typed) = call(
+        &router,
+        "GET",
+        "/notes?q=E2E+dual+representation",
+        None,
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{public_typed}");
+    assert_eq!(public_typed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(public_typed["items"][0]["views"], json!(["typed"]));
+
+    let (status, both_publication) = call(
+        &router,
+        "PUT",
+        &format!("/me/notes/{note_id}/publication"),
+        Some(OWNER_A),
+        &[("if-match", "1")],
+        Some(json!({
+            "language": "en",
+            "representations": {"original": original_rev, "typed": typed_rev}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{both_publication}");
+    assert_eq!(
+        both_publication["representations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (status, _) = call(
+        &router,
+        "DELETE",
+        &format!("/me/notes/{note_id}/publication"),
+        Some(OWNER_A),
+        &[("if-match", "2")],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, after_unpublish) = call(
+        &router,
+        "GET",
+        "/notes?q=E2E+dual+representation",
+        None,
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after_unpublish}");
+    assert!(after_unpublish["items"].as_array().unwrap().is_empty());
+
+    let (status, _) = call(
+        &router,
+        "DELETE",
+        &uri,
+        Some(OWNER_A),
+        &[("if-match", "2")],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, final_feed) = call(
+        &router,
+        "GET",
+        "/me/notes?sync_cursor=0",
+        Some(OWNER_A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{final_feed}");
+    assert_eq!(
+        final_feed["changes"].as_array().unwrap().last().unwrap()["change"],
+        "delete"
+    );
+    assert_eq!(
+        final_feed["changes"].as_array().unwrap().last().unwrap()["note_id"],
+        note_id
+    );
+}

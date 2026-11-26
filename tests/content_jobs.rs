@@ -316,6 +316,15 @@ async fn refresh_returns_same_job_without_duplicate_cortex_call_and_saves_draft_
     .await;
     assert_eq!(other_s, StatusCode::NOT_FOUND);
 
+    // A foreign account also cannot consume the event stream or cancel this job.
+    for (method, path) in [
+        ("GET", format!("/me/content_jobs/{job_id}/events")),
+        ("DELETE", format!("/me/content_jobs/{job_id}/execution")),
+    ] {
+        let (status, _) = call(&router, method, &path, Some(B), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
+
     // Let Cortex finish; verify CouchDB draft was saved BEFORE delete_chat was called.
     cortex.allow_finish.notify_waiters();
     for _ in 0..40 {
