@@ -35,6 +35,7 @@
 - *(notes)* Carry prepared generation config and guard non-text original extraction
 - *(notes)* Verify mixed original text subset extraction and non-default config handoff
 - *(notes)* Attach canonical external_ref origin to prepared study sources
+- *(notes)* Integrate backend validation and cleanup ownership
 
 ### 🐛 Bug Fixes
 
@@ -63,6 +64,7 @@
 - *(#35)* Persist synchronous temporary Cortex 201 results without polling history
 - Guard content job cancellation during Cortex start
 - *(notes)* Align prepared selection PDF page cap and text-only passages with Cortex
+- Scope Reports cleanup retry to recorded deletions
 
 ### 💼 Other
 
@@ -122,11 +124,14 @@
 - *(changelog)* Record administrative operations
 - *(changelog)* Record Reports card identity fix (#43)
 - *(changelog)* Record reviewed Reports cleanup integration (#37)
+- *(changelog)* Record reviewed synchronous jobs and prepared note handoff
 
 ### 🧪 Testing
 
 - *(gateway)* Verify v2 route access classes and cutover exclusions (#38)
 - *(reports)* Cover lost create response, digest 409, and concurrent duplicates (#37)
+- *(#39)* Add v2 backend end-to-end system flow integration test
+- Complete V2 integration and ownership coverage
 
 ## [1.1.0] - 2026-10-27
 
