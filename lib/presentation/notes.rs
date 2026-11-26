@@ -44,6 +44,10 @@ pub fn routes() -> Router<App> {
             "/me/notes/{note_id}/publication",
             get(publication_detail).put(publish).delete(unpublish),
         )
+        .route(
+            "/me/notes/{note_id}/certifications/prepared",
+            post(create_prepared_certification),
+        )
         .layer(DefaultBodyLimit::max(notes::MAX_BODY_BYTES + 1))
         .layer(middleware::from_fn(gunzip))
 }
@@ -395,4 +399,17 @@ async fn unpublish(
         response.headers_mut().insert(header::ETAG, value);
     }
     Ok(response)
+}
+
+async fn create_prepared_certification(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Value>), NoteError> {
+    let input: notes::PreparedCertificationInput = serde_json::from_slice(&body)
+        .map_err(|_| NoteError::invalid("invalid_body", "Invalid JSON body"))?;
+    let detail =
+        notes::create_prepared_certification_study(&app.store, &owner, &note_id, input).await?;
+    Ok((StatusCode::CREATED, Json(detail)))
 }

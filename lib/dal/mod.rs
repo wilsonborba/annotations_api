@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod certifications;
 pub mod cortex;
 pub mod documents;
 pub mod execution;
@@ -58,6 +59,8 @@ pub struct Store {
     pub plane: Arc<dyn plane::PlaneClient>,
     /// Central gateway waitlist client. Disabled when GATEWAY_URL is empty.
     pub waitlist: Arc<dyn waitlist::WaitlistClient>,
+    /// Optional Certifications client for prepared study handoff.
+    pub certifications: Arc<dyn certifications::CertificationsClient>,
     /// Optional Reports client for verifying ownership and cascading created-for-note deletes.
     pub reports: Arc<dyn reports::ReportsClient>,
     /// Cloud transcription execution. No server runtime exists yet.
@@ -100,6 +103,11 @@ impl Store {
                 http.clone(),
             ),
             waitlist: waitlist::HttpWaitlist::from_settings(&settings.gateway_url),
+            certifications: certifications::HttpCertifications::client(
+                settings.certifications_url,
+                settings.certifications_service_key,
+                http.clone(),
+            ),
             reports: reports::HttpReports::client(settings.reports_url, http.clone()),
             execution: execution::none(),
             http,
@@ -130,6 +138,7 @@ impl Store {
             cortex: Arc::new(cortex::DisabledCortex),
             plane: Arc::new(plane::DisabledPlane),
             waitlist: Arc::new(waitlist::DisabledWaitlist),
+            certifications: Arc::new(certifications::DisabledCertifications),
             reports: Arc::new(reports::DisabledReports),
             execution: execution::none(),
             http: reqwest::Client::new(),

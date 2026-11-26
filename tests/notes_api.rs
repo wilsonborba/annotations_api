@@ -1040,6 +1040,675 @@ async fn request_bodies_are_checked_before_any_write() {
 }
 
 #[tokio::test]
+async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key() {
+    use annotations_api::dal::certifications::HttpCertifications;
+    use axum::{Json, Router, http::HeaderMap, routing::post};
+    use std::sync::{Arc, Mutex};
+
+    let captured: Arc<Mutex<Vec<(String, String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_srv = captured.clone();
+    let fake_cert = Router::new().route(
+        "/studies/prepared",
+        post(move |headers: HeaderMap, Json(body): Json<Value>| {
+            let captured = captured_srv.clone();
+            async move {
+                let uuid = headers
+                    .get("x-uuid")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let key = headers
+                    .get("x-service-key")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                if key != "cert-svc-secret" {
+                    return (StatusCode::FORBIDDEN, Json(json!({"error": "bad key"})));
+                }
+                captured.lock().unwrap().push((uuid.clone(), key, body.clone()));
+                (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "study": {"id": "study-prep-1", "owner_id": uuid, "source_origin": "annotations"},
+                        "sources": body["sources"]
+                    })),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, fake_cert).await.unwrap();
+    });
+
+    let (mut store, _) = setup().await;
+    let router_unconfigured = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router_unconfigured,
+        A,
+        json!({
+            "client_note_id": "prep-n1",
+            "metadata": {"title": "Study Note"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Study Note")}}
+        }),
+    )
+    .await;
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+    let _ = create(
+        &router_unconfigured,
+        B,
+        json!({
+            "client_note_id": "prep-nb",
+            "metadata": {"title": "Study Note B"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Study Note B")}}
+        }),
+    )
+    .await;
+
+    sqlx::query(
+        "INSERT INTO files(file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,created_at,updated_at,fsm_reference)
+         VALUES('file-a-ready',$1,'slides.pdf','application/pdf',42,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','attachment','ready',1,1,'annotations/a/slides.pdf')",
+    )
+    .bind(A)
+    .execute(&store.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO files(file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,created_at,updated_at,fsm_reference)
+         VALUES('file-b-ready',$1,'b.pdf','application/pdf',10,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','attachment','ready',1,1,'annotations/b/b.pdf')",
+    )
+    .bind(B)
+    .execute(&store.db)
+    .await
+    .unwrap();
+
+    // Unconfigured certifications client fails closed with 503.
+    let unconf = call(
+        &router_unconfigured,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "sources": [{"file_id": "file-a-ready"}]
+        })),
+    )
+    .await;
+    assert_eq!(unconf.status, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Configured HttpCertifications forwards x-uuid + x-service-key + authoritative fsm_reference.
+    store.certifications = HttpCertifications::client(
+        format!("http://{addr}"),
+        "cert-svc-secret".into(),
+        reqwest::Client::new(),
+    );
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    // Reject referencing another user's file_id.
+    let stolen = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "sources": [{"file_id": "file-b-ready"}]
+        })),
+    )
+    .await;
+    assert_eq!(stolen.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(captured.lock().unwrap().is_empty());
+
+    // Succeeds for owned ready file without browser holding CERTIFICATIONS_SERVICE_KEY or raw fsm_ref.
+    let ok = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "description": "From note",
+            "sources": [{"file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-3"}]
+        })),
+    )
+    .await;
+    assert_eq!(ok.status, StatusCode::CREATED, "{:?}", ok.body);
+    assert_eq!(ok.body["study"]["id"], "study-prep-1");
+    assert_eq!(captured.lock().unwrap().len(), 1);
+    assert_eq!(captured.lock().unwrap()[0].0, A);
+    assert_eq!(captured.lock().unwrap()[0].1, "cert-svc-secret");
+    assert_eq!(
+        captured.lock().unwrap()[0].2["sources"][0]["fsm_ref"],
+        "annotations/a/slides.pdf"
+    );
+    assert_eq!(
+        captured.lock().unwrap()[0].2["sources"][0]["external_ref"],
+        "annotations:file:file-a-ready"
+    );
+
+    // Reject forged authority fields and malformed selections with zero downstream calls.
+    let forged = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Forged",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "fsm_ref": "evil/ref"}]
+        })),
+    )
+    .await;
+    assert!(
+        matches!(
+            forged.status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{:?}",
+        forged.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    let bad_sel = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Sel",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "5-2"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_sel.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_sel.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    let bad_pages_cap = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Over 100 Pages",
+            "sources": [{"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-101"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_pages_cap.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_pages_cap.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Reject invalid config language with 422 and zero downstream calls.
+    let bad_config_lang = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Lang Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "de",
+                "count": 5
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_config_lang.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_config_lang.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Reject invalid config count (< 1 or > 20) with 422 and zero downstream calls.
+    let bad_config_count = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Bad Count Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "en",
+                "count": 25
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        bad_config_count.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        bad_config_count.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Reject unknown fields in config with 400/422 and zero downstream calls.
+    let bad_config_forged = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Forged Config",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "en",
+                "count": 5,
+                "admin": true
+            }
+        })),
+    )
+    .await;
+    assert!(
+        matches!(
+            bad_config_forged.status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{:?}",
+        bad_config_forged.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Stale expected_revision fails closed with 409 and zero downstream calls.
+    let stale_rev = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Stale Rev",
+            "expected_revision": 999,
+            "sources": [{"kind": "note_original"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        stale_rev.status,
+        StatusCode::CONFLICT,
+        "{:?}",
+        stale_rev.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Stale/wrong revision_id fails closed with 422 and zero downstream calls.
+    let wrong_rev_id = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Wrong RevId",
+            "sources": [{"kind": "note_typed", "revision_id": "rev-does-not-exist"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        wrong_rev_id.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        wrong_rev_id.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 1);
+
+    // Nondefault config (Portuguese, count 15) successfully forwards to downstream Certifications.
+    let ok_with_config = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Biology Prep with Config",
+            "description": "Portuguese 15 questions",
+            "sources": [{"file_id": "file-a-ready"}],
+            "config": {
+                "language": "pt-BR",
+                "count": 15
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        ok_with_config.status,
+        StatusCode::CREATED,
+        "{:?}",
+        ok_with_config.body
+    );
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    assert_eq!(captured.lock().unwrap()[1].2["config"]["language"], "pt-BR");
+    assert_eq!(captured.lock().unwrap()[1].2["config"]["count"], 15);
+
+    // Create a note with both original and typed representations.
+    let typed_doc = json!({
+        "blocks": [
+            {"id": "h1", "kind": "heading", "level": 1, "spans": [{"text": "Cellular Respiration"}]},
+            {"id": "p1", "kind": "paragraph", "spans": [{"text": "ATP synthesis in mitochondria."}]}
+        ]
+    });
+    let create_both = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-mixed-cert",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": original(40)},
+                "typed": {"schema_version": 1, "document": typed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        create_both.status,
+        StatusCode::CREATED,
+        "{:?}",
+        create_both.body
+    );
+    let mixed_note_id = create_both.body["note_id"].as_str().unwrap().to_string();
+    let updated_rev = create_both.body["revision"].as_i64().unwrap();
+    let typed_rev_id = create_both.body["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["representation"] == "typed")
+        .unwrap()["revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let files_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+        .bind(A)
+        .fetch_one(&store.db)
+        .await
+        .unwrap();
+
+    // Handoff mixing note_original, note_typed (explicit revision_id), and file materializes note text into FSM once.
+    let mixed = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Mixed Study",
+            "description": "Chosen settings",
+            "expected_revision": updated_rev,
+            "sources": [
+                {"kind": "note_original"},
+                {"kind": "note_typed", "revision_id": typed_rev_id, "selection_kind": "passages", "selection_spec": "p1:0-10"},
+                {"kind": "file", "file_id": "file-a-ready", "selection_kind": "pages", "selection_spec": "1-3"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(mixed.status, StatusCode::CREATED, "{:?}", mixed.body);
+    {
+        let calls = captured.lock().unwrap();
+        let payload = &calls.last().unwrap().2;
+        assert_eq!(payload["title"], "Mixed Study");
+        assert_eq!(payload["description"], "Chosen settings");
+        assert_eq!(payload["sources"][0]["mime_type"], "text/plain");
+        assert_eq!(payload["sources"][0]["selection_kind"], "all");
+        assert_eq!(payload["sources"][1]["mime_type"], "text/plain");
+        assert_eq!(payload["sources"][1]["selection_kind"], "passages");
+        assert_eq!(payload["sources"][1]["selection_spec"], "p1:0-10");
+        assert_eq!(payload["sources"][2]["fsm_ref"], "annotations/a/slides.pdf");
+        assert_eq!(payload["sources"][2]["selection_kind"], "pages");
+        assert_eq!(payload["sources"][2]["selection_spec"], "1-3");
+    }
+    let files_after_first: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+        .bind(A)
+        .fetch_one(&store.db)
+        .await
+        .unwrap();
+    assert_eq!(files_after_first, files_before + 2);
+
+    // Attempting handoff with note_original that has only non-text items (image/strokes) fails with 422 empty_note_source.
+    let calls_before_empty = captured.lock().unwrap().len();
+    let img_only_note = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-img-only",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": with_image("file-a-ready")}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(img_only_note.status, StatusCode::CREATED);
+    let img_note_id = img_only_note.body["note_id"].as_str().unwrap();
+
+    let empty_extracted = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{img_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Empty Extracted Text",
+            "sources": [{"kind": "note_original"}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        empty_extracted.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        empty_extracted.body
+    );
+    assert_eq!(empty_extracted.body["code"], "empty_note_source");
+    assert_eq!(captured.lock().unwrap().len(), calls_before_empty);
+
+    // Repeating the same note_original + note_typed handoff dedups against existing ready files (no new FSM uploads).
+    let mixed_repeat = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_note_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Mixed Study Repeat",
+            "expected_revision": updated_rev,
+            "sources": [
+                {"kind": "note_original"},
+                {"kind": "note_typed"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(
+        mixed_repeat.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_repeat.body
+    );
+    let files_after_repeat: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE owner_id=$1")
+            .bind(A)
+            .fetch_one(&store.db)
+            .await
+            .unwrap();
+    assert_eq!(files_after_repeat, files_after_first);
+
+    // Mixed document with text, ink strokes, images, and group proves only text subset is materialized.
+    let mixed_doc = json!({
+        "page": {"width": 1000, "background": {"kind": "blank"}},
+        "items": [
+            {"id": "t1", "kind": "text", "x": 0, "y": 0, "width": 160, "height": 80,
+             "spans": [{"text": "First chapter on cellular respiration."}]},
+            {"id": "s1", "kind": "stroke", "tool": "round", "brush_version": 1,
+             "width": 2.5, "color": "#000000FF", "opacity": 1,
+             "samples": {"count": 2, "data": "AQCAGYDIAYCWAcAlABA"},
+             "nodes": [
+                 {"x": 1600, "y": 9600, "mode": "smooth", "corner": false, "sample": 0},
+                 {"x": 14400, "y": 12000, "mode": "smooth", "corner": false, "sample": 1}
+             ]},
+            {"id": "t2", "kind": "text", "x": 240, "y": 0, "width": 160, "height": 80,
+             "spans": [{"text": "Second chapter on oxidative phosphorylation."}]},
+            {"id": "i1", "kind": "image", "x": 480, "y": 0, "width": 160, "height": 80, "file_id": "file-a-ready"},
+            {"id": "g1", "kind": "group", "members": ["t1", "s1"]}
+        ]
+    });
+    let mixed_content_note = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "n-mixed-content-subset",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": mixed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        mixed_content_note.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_content_note.body
+    );
+    let mixed_c_id = mixed_content_note.body["note_id"].as_str().unwrap();
+
+    let mixed_c_study = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_c_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Cellular Biology Study",
+            "description": "Subset text extraction test",
+            "sources": [{"kind": "note_original"}],
+            "config": {"language": "pt-BR", "count": 15}
+        })),
+    )
+    .await;
+    assert_eq!(
+        mixed_c_study.status,
+        StatusCode::CREATED,
+        "{:?}",
+        mixed_c_study.body
+    );
+    let payload = {
+        let calls = captured.lock().unwrap();
+        calls.last().unwrap().2.clone()
+    };
+    assert_eq!(payload["title"], "Cellular Biology Study");
+    assert_eq!(payload["config"]["language"], "pt-BR");
+    assert_eq!(payload["config"]["count"], 15);
+    assert_eq!(payload["sources"].as_array().unwrap().len(), 1);
+    use sha2::{Digest, Sha256};
+    let fsm_ref = payload["sources"][0]["fsm_ref"].as_str().unwrap();
+    let expected_text =
+        "First chapter on cellular respiration.\nSecond chapter on oxidative phosphorylation.\n";
+    let expected_sha = format!("{:x}", Sha256::digest(expected_text.as_bytes()));
+    assert_eq!(payload["sources"][0]["sha256"], expected_sha);
+    assert!(!fsm_ref.is_empty());
+
+    let file_row =
+        sqlx::query("SELECT filename, content_type, sha256 FROM files WHERE fsm_reference=$1")
+            .bind(fsm_ref)
+            .fetch_one(&store.db)
+            .await
+            .unwrap();
+    let sha: String = file_row.get("sha256");
+    assert_eq!(sha, expected_sha);
+
+    let rev1: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='original'",
+    )
+    .bind(mixed_c_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+    let expected_ext1 = format!("annotations:note:{mixed_c_id}:original:{rev1}");
+    assert_eq!(payload["sources"][0]["external_ref"], expected_ext1);
+
+    // Verify two notes with identical text bytes reuse file bytes but retain distinct per-study external_ref origin.
+    let mixed_c2 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "prep-mixed-2",
+            "main_representation": "original",
+            "representations": {
+                "original": {"schema_version": 1, "document": mixed_doc}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(mixed_c2.status, StatusCode::CREATED, "{:?}", mixed_c2.body);
+    let mixed_c2_id = mixed_c2.body["note_id"].as_str().unwrap();
+
+    let mixed_c2_study = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{mixed_c2_id}/certifications/prepared"),
+        Some(A),
+        &[],
+        Some(json!({
+            "title": "Cellular Biology Study 2",
+            "description": "Dedupe byte reuse test",
+            "sources": [{"kind": "note_original"}],
+            "config": {"language": "th", "count": 10}
+        })),
+    )
+    .await;
+    assert_eq!(mixed_c2_study.status, StatusCode::CREATED);
+    let payload2 = {
+        let calls = captured.lock().unwrap();
+        calls.last().unwrap().2.clone()
+    };
+    assert_eq!(payload2["title"], "Cellular Biology Study 2");
+    assert_eq!(payload2["config"]["language"], "th");
+    assert_eq!(payload2["config"]["count"], 10);
+    // Verified byte dedupe: identical fsm_ref reuses the existing uploaded file
+    assert_eq!(payload2["sources"][0]["fsm_ref"], fsm_ref);
+    // Verified distinct source origin: retains distinct per-study external_ref with note2 and its revision
+    let rev2: String = sqlx::query_scalar(
+        "SELECT r.revision_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation='original'",
+    )
+    .bind(mixed_c2_id)
+    .fetch_one(&store.db)
+    .await
+    .unwrap();
+    let expected_ext2 = format!("annotations:note:{mixed_c2_id}:original:{rev2}");
+    assert_eq!(payload2["sources"][0]["external_ref"], expected_ext2);
+    assert_ne!(expected_ext1, expected_ext2);
+}
+
+#[tokio::test]
 async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     let (mut store, _) = setup().await;
     let mock_reports = annotations_api::dal::reports::MockReports::new();

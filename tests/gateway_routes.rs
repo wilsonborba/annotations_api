@@ -74,6 +74,11 @@ const V2_ROUTES: &[(&str, &str, Access)] = &[
     ("GET", "/me/notes/{note_id}/publication", Access::Session),
     ("PUT", "/me/notes/{note_id}/publication", Access::Session),
     ("DELETE", "/me/notes/{note_id}/publication", Access::Session),
+    (
+        "POST",
+        "/me/notes/{note_id}/certifications/prepared",
+        Access::Session,
+    ),
     ("POST", "/me/notes/{note_id}/reports", Access::Session),
     (
         "GET",

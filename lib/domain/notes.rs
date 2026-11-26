@@ -1673,3 +1673,688 @@ pub async fn delete(
         ))
     }
 }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationSourceInput {
+    pub kind: Option<String>,
+    pub file_id: Option<String>,
+    pub revision_id: Option<String>,
+    pub selection_kind: Option<String>,
+    pub selection_spec: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationConfigInput {
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub count: Option<i64>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCertificationInput {
+    pub title: String,
+    pub description: Option<String>,
+    pub expected_revision: Option<i64>,
+    pub sources: Vec<PreparedCertificationSourceInput>,
+    #[serde(default)]
+    pub config: Option<PreparedCertificationConfigInput>,
+}
+
+const MAX_SELECTION_SPEC_BYTES: usize = 2000;
+const MAX_SELECTION_RANGES: usize = 100;
+const MAX_SELECTED_PDF_PAGES: u64 = 100;
+
+fn normalize_mime_base(mime_type: &str) -> String {
+    mime_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn parse_ascii_u64(s: &str) -> Option<u64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<u64>().ok()
+}
+
+fn canonicalize_selection(kind: &str, spec: &str, mime_type: &str) -> R<String> {
+    if !matches!(kind, "all" | "pages" | "passages" | "intervals") {
+        return Err(NoteError::invalid(
+            "invalid_selection",
+            "Selection kind must be all, pages, passages, or intervals",
+        ));
+    }
+    let trimmed = spec.trim();
+    if trimmed.len() > MAX_SELECTION_SPEC_BYTES {
+        return Err(NoteError::invalid(
+            "invalid_selection",
+            "Selection spec exceeds 2000 bytes",
+        ));
+    }
+    if kind == "all" {
+        if !trimmed.is_empty() {
+            return Err(NoteError::invalid(
+                "invalid_selection",
+                "Selection spec must be empty when kind is all",
+            ));
+        }
+        return Ok(String::new());
+    }
+    if trimmed.is_empty() {
+        return Err(NoteError::invalid(
+            "invalid_selection",
+            "Selection spec is required when kind is not all",
+        ));
+    }
+    match kind {
+        "pages" => {
+            if normalize_mime_base(mime_type) != "application/pdf" {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "pages selection requires application/pdf source",
+                ));
+            }
+            let parts: Vec<&str> = trimmed.split(',').collect();
+            if parts.len() > MAX_SELECTION_RANGES {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "Too many page ranges",
+                ));
+            }
+            let mut ranges: Vec<(u32, u32)> = Vec::with_capacity(parts.len());
+            let mut total_pages: u64 = 0;
+            for raw_part in parts {
+                let part = raw_part.trim();
+                if part.is_empty() {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Empty page range segment",
+                    ));
+                }
+                let (s, e) = if let Some((a, b)) = part.split_once('-') {
+                    let sv = parse_ascii_u64(a)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or_else(|| {
+                            NoteError::invalid("invalid_selection", "Invalid page start")
+                        })?;
+                    let ev = parse_ascii_u64(b)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or_else(|| {
+                            NoteError::invalid("invalid_selection", "Invalid page end")
+                        })?;
+                    (sv, ev)
+                } else {
+                    let v = parse_ascii_u64(part)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or_else(|| {
+                            NoteError::invalid("invalid_selection", "Invalid page number")
+                        })?;
+                    (v, v)
+                };
+                if s == 0 || e < s || e > 100_000 {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Page range must be 1-based with start <= end",
+                    ));
+                }
+                if let Some(&(_, prev_end)) = ranges.last()
+                    && s <= prev_end
+                {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Page ranges must be strictly increasing and disjoint",
+                    ));
+                }
+                total_pages = total_pages.saturating_add(u64::from(e - s + 1));
+                if total_pages > MAX_SELECTED_PDF_PAGES {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Total selected PDF pages must not exceed 100",
+                    ));
+                }
+                ranges.push((s, e));
+            }
+            Ok(ranges
+                .into_iter()
+                .map(|(s, e)| {
+                    if s == e {
+                        s.to_string()
+                    } else {
+                        format!("{s}-{e}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(","))
+        }
+        "passages" => {
+            if !normalize_mime_base(mime_type).starts_with("text/") {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "passages selection requires text/* source",
+                ));
+            }
+            let parts: Vec<&str> = trimmed.split(',').collect();
+            if parts.len() > MAX_SELECTION_RANGES {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "Too many passage ranges",
+                ));
+            }
+            let mut ranges: Vec<(u64, u64)> = Vec::with_capacity(parts.len());
+            for raw_part in parts {
+                let part = raw_part.trim();
+                let rest = part.strip_prefix("p1:").ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Passage range must use p1:start-end")
+                })?;
+                let (a, b) = rest.split_once('-').ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Passage range must use p1:start-end")
+                })?;
+                let s = parse_ascii_u64(a).ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Invalid passage start offset")
+                })?;
+                let e = parse_ascii_u64(b).ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Invalid passage end offset")
+                })?;
+                if e <= s {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Passage range must be half-open with end > start",
+                    ));
+                }
+                if let Some(&(_, prev_end)) = ranges.last()
+                    && s < prev_end
+                {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Passage ranges must be sorted and non-overlapping",
+                    ));
+                }
+                ranges.push((s, e));
+            }
+            Ok(ranges
+                .into_iter()
+                .map(|(s, e)| format!("p1:{s}-{e}"))
+                .collect::<Vec<_>>()
+                .join(","))
+        }
+        "intervals" => {
+            if !normalize_mime_base(mime_type).starts_with("audio/") {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "intervals selection requires an audio source",
+                ));
+            }
+            let body = trimmed.strip_prefix("ms:").ok_or_else(|| {
+                NoteError::invalid("invalid_selection", "Intervals spec must start with ms:")
+            })?;
+            if body.is_empty() {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "Intervals spec requires at least one start-end range",
+                ));
+            }
+            let parts: Vec<&str> = body.split(',').collect();
+            if parts.len() > MAX_SELECTION_RANGES {
+                return Err(NoteError::invalid(
+                    "invalid_selection",
+                    "Too many audio intervals",
+                ));
+            }
+            let mut ranges: Vec<(u64, u64)> = Vec::with_capacity(parts.len());
+            for raw_part in parts {
+                let part = raw_part.trim();
+                let (a, b) = part.split_once('-').ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Interval range must use start-end")
+                })?;
+                let s = parse_ascii_u64(a).ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Invalid interval start")
+                })?;
+                let e = parse_ascii_u64(b).ok_or_else(|| {
+                    NoteError::invalid("invalid_selection", "Invalid interval end")
+                })?;
+                if e <= s {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Interval range must have end > start",
+                    ));
+                }
+                if let Some(&(_, prev_end)) = ranges.last()
+                    && s < prev_end
+                {
+                    return Err(NoteError::invalid(
+                        "invalid_selection",
+                        "Interval ranges must be sorted and non-overlapping",
+                    ));
+                }
+                ranges.push((s, e));
+            }
+            let formatted = ranges
+                .into_iter()
+                .map(|(s, e)| format!("{s}-{e}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(format!("ms:{formatted}"))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn collect_original_text(items: &[Value], out: &mut String) {
+    for item in items {
+        match item.get("kind").and_then(Value::as_str) {
+            Some("text") => {
+                let Some(spans) = item.get("spans").and_then(Value::as_array) else {
+                    continue;
+                };
+                let mut line = String::new();
+                for span in spans {
+                    if let Some(text) = span.get("text").and_then(Value::as_str) {
+                        line.push_str(text);
+                    }
+                }
+                if !line.trim().is_empty() {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+            }
+            Some("group") => {
+                if let Some(children) = item.get("items").and_then(Value::as_array) {
+                    collect_original_text(children, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn original_text(document: &Value) -> String {
+    let mut out = String::new();
+    if let Some(items) = document.get("items").and_then(Value::as_array) {
+        collect_original_text(items, &mut out);
+    }
+    out
+}
+
+fn normalize_plain_text(raw: &str) -> String {
+    let without_bom = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    without_bom
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\0', "")
+}
+
+enum PendingPreparedSource {
+    Ready(Value),
+    UploadNoteText {
+        filename: String,
+        bytes: Vec<u8>,
+        sha256: String,
+        selection_kind: String,
+        selection_spec: String,
+        external_ref: String,
+    },
+}
+
+/// Server-to-server handoff from Notes to Certifications `POST /studies/prepared`.
+/// Resolves owned ready `files` rows or materializes `note_original`/`note_typed`
+/// text revisions as text-only source snapshots with exact saved revision provenance
+/// (not entire note preservation). Non-text content (such as ink strokes, images, and cards)
+/// is excluded from this text snapshot per H3 explicit eligible subset semantics.
+/// Empty materializations are rejected with 422 `empty_note_source` before effects.
+/// Validates expected_revision, checks selection grammar, and forwards `x-uuid` +
+/// `CERTIFICATIONS_SERVICE_KEY` server-side.
+pub async fn create_prepared_certification_study(
+    store: &Store,
+    owner: &str,
+    note_id: &str,
+    input: PreparedCertificationInput,
+) -> R<Value> {
+    let title = input.title.trim();
+    if title.is_empty() || title.chars().count() > 200 {
+        return Err(NoteError::invalid(
+            "invalid_title",
+            "title must be 1 to 200 characters",
+        ));
+    }
+    if input.sources.is_empty() || input.sources.len() > 20 {
+        return Err(NoteError::invalid(
+            "invalid_sources",
+            "Prepared study requires 1 to 20 sources",
+        ));
+    }
+    let note_row = sqlx::query("SELECT revision FROM notes WHERE note_id=$1 AND owner_id=$2")
+        .bind(note_id)
+        .bind(owner)
+        .fetch_optional(&store.db)
+        .await?;
+    let Some(note_row) = note_row else {
+        return Err(NoteError::not_found());
+    };
+    let current_revision: i64 = note_row.get("revision");
+    if let Some(expected_rev) = input.expected_revision
+        && expected_rev != current_revision
+    {
+        return Err(NoteError {
+            status: StatusCode::CONFLICT,
+            code: "revision_conflict".into(),
+            message: "Note revision changed; reload before creating study".into(),
+            current_revision: Some(current_revision),
+        });
+    }
+
+    let validated_config = if let Some(ref cfg) = input.config {
+        let lang = match cfg.language.as_deref().map(str::trim) {
+            Some("en") | None | Some("") => "en".to_string(),
+            Some("pt-BR") => "pt-BR".to_string(),
+            Some("th") => "th".to_string(),
+            Some(other) => {
+                return Err(NoteError::invalid(
+                    "invalid_config",
+                    format!("Unsupported language '{other}'. Supported languages: en, pt-BR, th"),
+                ));
+            }
+        };
+        let count = match cfg.count {
+            Some(c) if (1..=20).contains(&c) => c,
+            None => 10,
+            Some(c) => {
+                return Err(NoteError::invalid(
+                    "invalid_config",
+                    format!("Invalid question count {c}. Count must be between 1 and 20"),
+                ));
+            }
+        };
+        Some(json!({
+            "language": lang,
+            "count": count,
+        }))
+    } else {
+        None
+    };
+
+    let mut pending_sources = Vec::with_capacity(input.sources.len());
+    for s in &input.sources {
+        let kind = match s.kind.as_deref().map(str::trim) {
+            None if s.file_id.is_some() => "file",
+            Some(k) => k,
+            None => {
+                return Err(NoteError::invalid(
+                    "invalid_source",
+                    "Source kind is required",
+                ));
+            }
+        };
+        let sel_kind = s
+            .selection_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("all");
+        let sel_spec_raw = s.selection_spec.as_deref().unwrap_or("");
+
+        match kind {
+            "file" => {
+                if s.revision_id.is_some() {
+                    return Err(NoteError::invalid(
+                        "invalid_source",
+                        "revision_id is only allowed for note_original and note_typed sources",
+                    ));
+                }
+                let fid = s.file_id.as_deref().map(str::trim).unwrap_or("");
+                if fid.is_empty() {
+                    return Err(NoteError::invalid("invalid_source", "file_id is required"));
+                }
+                let row = sqlx::query(
+                    "SELECT filename, content_type, size_bytes, sha256, status, fsm_reference FROM files WHERE file_id=$1 AND owner_id=$2",
+                )
+                .bind(fid)
+                .bind(owner)
+                .fetch_optional(&store.db)
+                .await?;
+                let Some(r) = row else {
+                    return Err(NoteError::invalid(
+                        "file_not_found",
+                        "Referenced file does not exist for this owner",
+                    ));
+                };
+                let status: String = r.get("status");
+                let fsm_ref: Option<String> = r.get("fsm_reference");
+                let Some(fsm_ref) = fsm_ref.filter(|v| !v.trim().is_empty()) else {
+                    return Err(NoteError::invalid(
+                        "file_not_ready",
+                        "Referenced file is not ready for Certifications handoff",
+                    ));
+                };
+                if status != "ready" {
+                    return Err(NoteError::invalid(
+                        "file_not_ready",
+                        "Referenced file is not ready for Certifications handoff",
+                    ));
+                }
+                let filename: String = r.get("filename");
+                let mime_type: String = r.get("content_type");
+                let size_bytes: i64 = r.get("size_bytes");
+                let sha256: String = r.get("sha256");
+                let sel_spec = canonicalize_selection(sel_kind, sel_spec_raw, &mime_type)?;
+                let file_ref = format!("annotations:file:{fid}");
+                pending_sources.push(PendingPreparedSource::Ready(json!({
+                    "filename": filename,
+                    "mime_type": mime_type,
+                    "size_bytes": size_bytes,
+                    "sha256": sha256,
+                    "fsm_ref": fsm_ref,
+                    "selection_kind": sel_kind,
+                    "selection_spec": sel_spec,
+                    "external_ref": file_ref,
+                })));
+            }
+            "note_original" | "note_typed" => {
+                if s.file_id.is_some() {
+                    return Err(NoteError::invalid(
+                        "invalid_source",
+                        "file_id is not allowed for note_original or note_typed sources",
+                    ));
+                }
+                let representation = if kind == "note_original" {
+                    "original"
+                } else {
+                    "typed"
+                };
+                let sel_spec = canonicalize_selection(sel_kind, sel_spec_raw, "text/plain")?;
+                let rev_row = match s.revision_id.as_deref().map(str::trim) {
+                    Some("") => {
+                        return Err(NoteError::invalid(
+                            "invalid_revision",
+                            "revision_id must not be empty",
+                        ));
+                    }
+                    Some(rev_id) => sqlx::query(
+                        "SELECT revision_id, document_id FROM note_revisions WHERE revision_id=$1 AND note_id=$2 AND representation=$3",
+                    )
+                    .bind(rev_id)
+                    .bind(note_id)
+                    .bind(representation)
+                    .fetch_optional(&store.db)
+                    .await?,
+                    None => sqlx::query(
+                        "SELECT r.revision_id, r.document_id FROM note_current_revisions c JOIN note_revisions r ON r.revision_id=c.revision_id WHERE c.note_id=$1 AND c.representation=$2",
+                    )
+                    .bind(note_id)
+                    .bind(representation)
+                    .fetch_optional(&store.db)
+                    .await?,
+                };
+                let Some(rev_row) = rev_row else {
+                    return Err(NoteError::invalid(
+                        "invalid_revision",
+                        "Requested note representation revision does not exist for this note",
+                    ));
+                };
+                let revision_id: String = rev_row.get("revision_id");
+                let document_id: String = rev_row.get("document_id");
+                let stored = store
+                    .docs
+                    .get(&document_id)
+                    .await
+                    .map_err(NoteError::from)?;
+                let extracted = if representation == "typed" {
+                    crate::domain::discovery::typed_text(&stored["body"])
+                } else {
+                    original_text(&stored["body"])
+                };
+                let normalized = normalize_plain_text(&extracted);
+                if normalized.trim().is_empty() {
+                    return Err(NoteError::invalid(
+                        "empty_note_source",
+                        "Note representation has no extractable text for Certification",
+                    ));
+                }
+                let bytes = normalized.into_bytes();
+                let sha256 = format!("{:x}", Sha256::digest(&bytes));
+                let short_rev: String = revision_id.chars().take(12).collect();
+                let filename = format!("note-{representation}-{short_rev}.txt");
+                let note_ref = format!("annotations:note:{note_id}:{representation}:{revision_id}");
+
+                let existing = sqlx::query(
+                    "SELECT filename, content_type, size_bytes, sha256, fsm_reference FROM files WHERE owner_id=$1 AND sha256=$2 AND content_type='text/plain' AND status='ready' AND fsm_reference IS NOT NULL AND fsm_reference <> '' ORDER BY created_at DESC LIMIT 1",
+                )
+                .bind(owner)
+                .bind(&sha256)
+                .fetch_optional(&store.db)
+                .await?;
+                if let Some(r) = existing {
+                    pending_sources.push(PendingPreparedSource::Ready(json!({
+                        "filename": r.get::<String, _>("filename"),
+                        "mime_type": r.get::<String, _>("content_type"),
+                        "size_bytes": r.get::<i64, _>("size_bytes"),
+                        "sha256": r.get::<String, _>("sha256"),
+                        "fsm_ref": r.get::<String, _>("fsm_reference"),
+                        "selection_kind": sel_kind,
+                        "selection_spec": sel_spec,
+                        "external_ref": note_ref,
+                    })));
+                } else {
+                    pending_sources.push(PendingPreparedSource::UploadNoteText {
+                        filename,
+                        bytes,
+                        sha256,
+                        selection_kind: sel_kind.to_string(),
+                        selection_spec: sel_spec,
+                        external_ref: note_ref,
+                    });
+                }
+            }
+            _ => {
+                return Err(NoteError::invalid(
+                    "invalid_source",
+                    "Source kind must be file, note_original, or note_typed",
+                ));
+            }
+        }
+    }
+
+    let mut prepared_sources = Vec::with_capacity(pending_sources.len());
+    let mut uploaded_by_sha: std::collections::HashMap<String, (String, String, i64, String)> =
+        std::collections::HashMap::new();
+    for item in pending_sources {
+        match item {
+            PendingPreparedSource::Ready(v) => prepared_sources.push(v),
+            PendingPreparedSource::UploadNoteText {
+                filename,
+                bytes,
+                sha256,
+                selection_kind,
+                selection_spec,
+                external_ref,
+            } => {
+                let (stored_filename, mime_type, size_bytes, fsm_ref) = if let Some(cached) =
+                    uploaded_by_sha.get(&sha256)
+                {
+                    cached.clone()
+                } else {
+                    let size_bytes = bytes.len() as i64;
+                    let temp = store.files.staging_file().map_err(NoteError::from)?;
+                    tokio::fs::write(&temp, &bytes)
+                        .await
+                        .map_err(|_| NoteError::from(Error::unavailable()))?;
+                    let file_id = core::id();
+                    let album = format!("notes-cert-{file_id}");
+                    let uploaded = store
+                        .files
+                        .upload_path(&temp, &filename, "text/plain", &album, size_bytes)
+                        .await
+                        .map_err(NoteError::from)?;
+                    let now = core::now();
+                    if let Err(err) = sqlx::query(
+                            "INSERT INTO files(file_id,owner_id,filename,content_type,size_bytes,sha256,purpose,status,preview,created_at,updated_at,fsm_reference) VALUES($1,$2,$3,'text/plain',$4,$5,'content_job','ready',0,$6,$6,$7)",
+                        )
+                        .bind(&file_id)
+                        .bind(owner)
+                        .bind(&filename)
+                        .bind(size_bytes)
+                        .bind(&sha256)
+                        .bind(now)
+                        .bind(&uploaded.key)
+                        .execute(&store.db)
+                        .await
+                        {
+                            let _ = sqlx::query(
+                                "INSERT INTO file_cleanup(fsm_reference,attempts,created_at) VALUES($1,0,$2) ON CONFLICT(fsm_reference) DO NOTHING",
+                            )
+                            .bind(&uploaded.key)
+                            .bind(now)
+                            .execute(&store.db)
+                            .await;
+                            return Err(err.into());
+                        }
+                    let entry = (filename, "text/plain".to_string(), size_bytes, uploaded.key);
+                    uploaded_by_sha.insert(sha256.clone(), entry.clone());
+                    entry
+                };
+                prepared_sources.push(json!({
+                    "filename": stored_filename,
+                    "mime_type": mime_type,
+                    "size_bytes": size_bytes,
+                    "sha256": sha256,
+                    "fsm_ref": fsm_ref,
+                    "selection_kind": selection_kind,
+                    "selection_spec": selection_spec,
+                    "external_ref": external_ref,
+                }));
+            }
+        }
+    }
+
+    let mut payload = json!({
+        "title": title,
+        "description": input.description.as_deref().unwrap_or(""),
+        "sources": prepared_sources,
+    });
+    if let Some(cfg) = validated_config {
+        payload["config"] = cfg;
+    }
+    store
+        .certifications
+        .create_prepared_study(owner, payload)
+        .await
+        .map_err(|err| match err.0 {
+            axum::http::StatusCode::FORBIDDEN => {
+                NoteError::new(StatusCode::FORBIDDEN, "forbidden", err.1)
+            }
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY | axum::http::StatusCode::BAD_REQUEST => {
+                NoteError::invalid("invalid_prepared_study", &err.1)
+            }
+            _ => NoteError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "certifications_unavailable",
+                "Certifications service is unavailable",
+            ),
+        })
+}

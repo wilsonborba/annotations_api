@@ -252,8 +252,12 @@ pub struct Settings {
     pub reports_url: String,
     /// Server-held Plane Slim API key. Never exposed to clients or logs.
     pub plane_api_key: String,
-    /// Plane Slim workspace slug.
+    /// Optional Plane Slim workspace slug.
     pub plane_workspace: String,
+    /// Optional Certifications backend base URL for prepared study handoff.
+    pub certifications_url: String,
+    /// Server-held Certifications service key (`CERTIFICATIONS_SERVICE_KEY`). Never exposed to clients.
+    pub certifications_service_key: String,
     pub host: String,
     pub port: u16,
     pub development: bool,
@@ -282,6 +286,8 @@ impl Settings {
             reports_url: env("REPORTS_URL", ""),
             plane_api_key: env("PLANE_API_KEY", ""),
             plane_workspace: env("PLANE_WORKSPACE", "asodya"),
+            certifications_url: env("CERTIFICATIONS_URL", ""),
+            certifications_service_key: env("CERTIFICATIONS_SERVICE_KEY", ""),
             host: env("HOST", "127.0.0.1"),
             port: env("PORT", "8111").parse().unwrap_or(8111),
             development: env("DEVELOPMENT_MODE", "false").parse().unwrap_or(false),
