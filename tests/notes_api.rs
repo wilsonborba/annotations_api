@@ -616,17 +616,17 @@ async fn delete_removes_the_working_copy_and_keeps_a_shared_file() {
     assert_eq!(document_count(&store), 3);
 
     let uri = format!("/me/notes/{gone}");
-    let reports = call(
+    let invalid_cascade = call(
         &router,
         "DELETE",
-        &format!("{uri}?delete_owned_reports=true"),
+        &format!("{uri}?delete_owned_reports=maybe"),
         Some(A),
         &[("if-match", "1")],
         None,
     )
     .await;
-    assert_eq!(reports.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(reports.body["code"], "reports_cascade_unavailable");
+    assert_eq!(invalid_cascade.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid_cascade.body["code"], "invalid_delete_owned_reports");
     let missing = call(&router, "DELETE", &uri, Some(A), &[], None).await;
     assert_eq!(missing.status, StatusCode::PRECONDITION_REQUIRED);
     assert_eq!(missing.body["code"], "if_match_required");
@@ -1640,4 +1640,624 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
             .unwrap();
     let sha: String = file_row.get("sha256");
     assert_eq!(sha, expected_sha);
+}
+
+#[tokio::test]
+async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
+    let (mut store, _) = setup().await;
+    let mock_reports = annotations_api::dal::reports::MockReports::new();
+    mock_reports.insert_item("rep-linked-preexisting", A);
+    mock_reports.insert_item("rep-other-owner", B);
+    store.reports = mock_reports.clone();
+
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "cascade-n1",
+            "metadata": {"title": "Note One"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note One")}}
+        }),
+    )
+    .await;
+    assert_eq!(n1.status, StatusCode::CREATED, "{}", n1.body);
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+
+    let n2 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "cascade-n2",
+            "metadata": {"title": "Note Two"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note Two")}}
+        }),
+    )
+    .await;
+    assert_eq!(n2.status, StatusCode::CREATED);
+    let n2_id = n2.body["note_id"].as_str().unwrap().to_string();
+
+    let n_other = create(
+        &router,
+        B,
+        json!({
+            "client_note_id": "cascade-other-b",
+            "metadata": {"title": "Note B"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note B")}}
+        }),
+    )
+    .await;
+    assert_eq!(n_other.status, StatusCode::CREATED);
+    let n_other_id = n_other.body["note_id"].as_str().unwrap().to_string();
+
+    // Server-verified creation through Notes->Reports path records created_for_note.
+    let mut created_ids = Vec::new();
+    for title in ["Unreused Ok", "Fail Retry", "Reused By N2"] {
+        let r = call(
+            &router,
+            "POST",
+            &format!("/me/notes/{n1_id}/reports"),
+            Some(A),
+            &[],
+            Some(json!({
+                "mode": "create",
+                "project": "notes-proj",
+                "item": {"title": title, "template_id": "t1", "template_version": 1}
+            })),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::CREATED, "{title}: {:?}", r.body);
+        assert_eq!(r.body["relation_kind"], "created_for_note");
+        assert_eq!(r.body["item"]["project"], "notes-proj");
+        assert!(
+            !r.body["item"]["report_slug"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
+        assert!(
+            !r.body["item"]["dataset_id"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
+        created_ids.push(r.body["report_item_id"].as_str().unwrap().to_string());
+    }
+    let rep_ok = created_ids[0].clone();
+    let rep_fail = created_ids[1].clone();
+    let rep_reused = created_ids[2].clone();
+    mock_reports.set_delete_failure(&rep_fail, true);
+
+    // Register pre-existing item as linked.
+    let linked_reg = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": "rep-linked-preexisting", "relation_kind": "linked"})),
+    )
+    .await;
+    assert_eq!(linked_reg.status, StatusCode::CREATED);
+
+    // Reject client-asserted created_for_note (no pre-existing promotion or guessed IDs!).
+    for candidate in [
+        "nonexistent-uuid",
+        "rep-linked-preexisting",
+        "rep-other-owner",
+        &rep_ok,
+    ] {
+        let rej = call(
+            &router,
+            "POST",
+            &format!("/me/notes/{n2_id}/reports"),
+            Some(A),
+            &[],
+            Some(json!({"report_item_id": candidate, "relation_kind": "created_for_note"})),
+        )
+        .await;
+        assert_eq!(rej.status, StatusCode::UNPROCESSABLE_ENTITY, "{candidate}");
+        assert_eq!(rej.body["code"], "provenance_required");
+    }
+
+    // DB partial unique index forbids two notes holding created_for_note for one report_item_id.
+    let dup_creator = sqlx::query(
+        "INSERT INTO note_report_references(note_id,owner_id,report_item_id,relation_kind,created_at,updated_at) VALUES($1,$2,$3,'created_for_note',1,1)",
+    )
+    .bind(&n2_id)
+    .bind(A)
+    .bind(&rep_ok)
+    .execute(&store.db)
+    .await;
+    assert!(
+        dup_creator.is_err(),
+        "partial unique index must reject second creator"
+    );
+
+    // n2 links rep_reused, and user B also has a link row on rep_reused (must NEVER leak n_other_id to user A!).
+    let link_n2 = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": rep_reused, "relation_kind": "linked"})),
+    )
+    .await;
+    assert_eq!(link_n2.status, StatusCode::CREATED);
+    let link_other = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n_other_id}/reports"),
+        Some(B),
+        &[],
+        Some(json!({"report_item_id": rep_reused, "relation_kind": "linked"})),
+    )
+    .await;
+    assert_eq!(link_other.status, StatusCode::CREATED);
+
+    // Pre-delete preview on n1 warns only with caller A's reused note IDs (never n_other_id).
+    let preview = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{n1_id}/reports/delete-preview"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(preview.status, StatusCode::OK);
+    let created_items = preview.body["created_items"].as_array().unwrap();
+    let reused_entry = created_items
+        .iter()
+        .find(|e| e["report_item_id"] == rep_reused)
+        .unwrap();
+    assert_eq!(reused_entry["reused_by_note_ids"], json!([n2_id]));
+    assert!(!preview.body.to_string().contains(&n_other_id));
+
+    // Delete n1 with delete_owned_reports=true WITHOUT confirm_reused_report_ids:
+    // - rep_ok deleted (confirm=false)
+    // - rep_reused SKIPPED with explicit reuse warning (ZERO delete calls on rep_reused!)
+    // - rep_fail recorded in failed_report_deletions
+    // - rep-linked-preexisting NEVER sent to MockReports::delete_owned_item
+    let del = call(
+        &router,
+        "DELETE",
+        &format!("/me/notes/{n1_id}?delete_owned_reports=true"),
+        Some(A),
+        &[("if-match", "1")],
+        None,
+    )
+    .await;
+    assert_eq!(del.status, StatusCode::OK, "{:?}", del.body);
+    assert_eq!(del.body["note_deleted"], true);
+    assert_eq!(del.body["deleted_report_ids"], json!([rep_ok]));
+    assert_eq!(del.body["skipped_linked_count"], 1);
+    assert_eq!(del.body["reused_warnings"].as_array().unwrap().len(), 1);
+    assert_eq!(del.body["reused_warnings"][0]["report_item_id"], rep_reused);
+    assert_eq!(
+        del.body["reused_warnings"][0]["reused_by_note_ids"],
+        json!([n2_id])
+    );
+    assert!(!del.body.to_string().contains(&n_other_id));
+    assert_eq!(
+        del.body["failed_report_deletions"][0]["report_item_id"],
+        rep_fail
+    );
+    assert!(
+        !mock_reports
+            .delete_calls()
+            .iter()
+            .any(|(_, id, _)| id == &rep_reused
+                || id == "rep-linked-preexisting"
+                || id == "rep-other-owner")
+    );
+
+    // Retry cleanup after Reports recovers -> deletes rep_fail cleanly.
+    mock_reports.set_delete_failure(&rep_fail, false);
+    let retry = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports/retry-cleanup"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(retry.status, StatusCode::OK);
+    assert_eq!(retry.body["deleted_report_ids"], json!([rep_fail]));
+    assert_eq!(retry.body["failed_report_deletions"], json!([]));
+
+    // Scoped explicit confirmation: create on n3, reuse on n2, delete n3 WITH confirm_reused_report_ids -> deleted with confirm=true!
+    let n3 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "cascade-n3",
+            "metadata": {"title": "Note Three"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Note Three")}}
+        }),
+    )
+    .await;
+    let n3_id = n3.body["note_id"].as_str().unwrap().to_string();
+    let r3 = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n3_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "item": {"title": "Confirmed Reuse", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    let rep_confirmed = r3.body["report_item_id"].as_str().unwrap().to_string();
+    let _ = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({"report_item_id": rep_confirmed, "relation_kind": "linked"})),
+    )
+    .await;
+    let del3 = call(
+        &router,
+        "DELETE",
+        &format!(
+            "/me/notes/{n3_id}?delete_owned_reports=true&confirm_reused_report_ids={rep_confirmed}"
+        ),
+        Some(A),
+        &[("if-match", "1")],
+        None,
+    )
+    .await;
+    assert_eq!(del3.status, StatusCode::OK);
+    assert_eq!(del3.body["deleted_report_ids"], json!([rep_confirmed]));
+    assert_eq!(del3.body["reused_warnings"], json!([]));
+    assert!(
+        mock_reports
+            .delete_calls()
+            .iter()
+            .any(|(o, id, c)| o == A && id == &rep_confirmed && *c)
+    );
+
+    // Opaque server-minted receipt idempotency:
+    // 1) Reusing operation_key with a different project or payload fails 409 BEFORE calling Reports.
+    let op_k = "op-create-1";
+    let first_create = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Receipt Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(first_create.status, StatusCode::CREATED);
+    let first_id = first_create.body["report_item_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Retry with exact same operation_key + payload returns the same item without duplicating.
+    let retry_create = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Receipt Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(retry_create.status, StatusCode::CREATED);
+    assert_eq!(retry_create.body["report_item_id"], first_id);
+
+    // Changed payload or project with same operation_key fails 409 Conflict!
+    let changed_payload = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n2_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "project": "notes-proj",
+            "operation_key": op_k,
+            "item": {"title": "Different Chart", "template_id": "t1", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(changed_payload.status, StatusCode::CONFLICT);
+    assert_eq!(changed_payload.body["code"], "operation_key_conflict");
+}
+
+#[tokio::test]
+async fn http_reports_client_enforces_x_uuid_confirm_flag_and_bounded_reads() {
+    use annotations_api::dal::reports::HttpReports;
+    use axum::{
+        Json, Router,
+        extract::{Path, Query},
+        http::{HeaderMap, StatusCode},
+        routing::{get, post},
+    };
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(serde::Deserialize)]
+    struct DelQ {
+        #[serde(default)]
+        confirm: bool,
+    }
+
+    let items: Arc<Mutex<HashMap<String, (String, bool)>>> = Arc::new(Mutex::new(HashMap::new()));
+    let items_post = items.clone();
+    let items_get = items.clone();
+    let items_del = items.clone();
+
+    let fake = Router::new()
+        .route(
+            "/me/projects/{project}/items",
+            post(move |headers: HeaderMap, Path(project): Path<String>| {
+                let items = items_post.clone();
+                async move {
+                    let owner = headers
+                        .get("x-uuid")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if owner.is_empty() {
+                        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauth"})));
+                    }
+                    let id = "http-rep-1".to_string();
+                    let replay = headers
+                        .get("idempotency-key")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|k| k == "idem-replay");
+                    items
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone(), (owner.to_string(), true));
+                    let status = if replay {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::CREATED
+                    };
+                    (
+                        status,
+                        Json(json!({
+                            "item": {
+                                "id": id,
+                                "project": project,
+                                "report_slug": "owner-http-1",
+                                "dataset_id": "ds-http-1",
+                                "source_app": "annotations",
+                                "template_id": "bar",
+                                "template_version": 1,
+                                "audience": "personal",
+                                "control_authority": "owner",
+                                "etag": "\"e1\"",
+                                "embed_url": "/v1/embed/p1/owner-http-1"
+                            }
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/me/items/{id}",
+            get(move |headers: HeaderMap, Path(id): Path<String>| {
+                let items = items_get.clone();
+                async move {
+                    let owner = headers
+                        .get("x-uuid")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    match items.lock().unwrap().get(&id) {
+                        Some((o, _)) if o == owner => {
+                            (StatusCode::OK, Json(json!({"item": {"id": id}})))
+                        }
+                        Some(_) => (StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"}))),
+                        None => (StatusCode::NOT_FOUND, Json(json!({"error": "missing"}))),
+                    }
+                }
+            })
+            .delete(
+                move |headers: HeaderMap, Path(id): Path<String>, Query(q): Query<DelQ>| {
+                    let items = items_del.clone();
+                    async move {
+                        let owner = headers
+                            .get("x-uuid")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        let mut map = items.lock().unwrap();
+                        match map.get(&id).cloned() {
+                            Some((o, _)) if o != owner => {
+                                (StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"})))
+                            }
+                            Some((_, reused)) if reused && !q.confirm => (
+                                StatusCode::CONFLICT,
+                                Json(json!({"deleted": false, "requires_confirmation": true})),
+                            ),
+                            Some(_) => {
+                                map.remove(&id);
+                                (
+                                    StatusCode::OK,
+                                    Json(json!({"deleted": true, "requires_confirmation": false})),
+                                )
+                            }
+                            None => (StatusCode::NOT_FOUND, Json(json!({"error": "missing"}))),
+                        }
+                    }
+                },
+            ),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, fake).await.unwrap();
+    });
+
+    let client = HttpReports::client(format!("http://{addr}"), reqwest::Client::new());
+    let created = client
+        .create_owned_item(A, "p1", "idem-1", json!({"title": "Item"}))
+        .await
+        .unwrap();
+    assert_eq!(created.id, "http-rep-1");
+    assert_eq!(created.report_slug, "owner-http-1");
+    assert_eq!(created.dataset_id, "ds-http-1");
+
+    // 200 OK idempotent replay is accepted with full metadata.
+    let replayed = client
+        .create_owned_item(A, "p1", "idem-replay", json!({"title": "Item"}))
+        .await
+        .unwrap();
+    assert_eq!(replayed.id, "http-rep-1");
+
+    // Wrong x-uuid is rejected with 403.
+    let wrong_owner = client.verify_owned_item(B, &created.id).await.unwrap_err();
+    assert_eq!(wrong_owner.0, StatusCode::FORBIDDEN);
+
+    // Unconfirmed delete on reused item does NOT append ?confirm=true -> gets 409 CONFLICT.
+    let no_confirm = client
+        .delete_owned_item(A, &created.id, false)
+        .await
+        .unwrap_err();
+    assert_eq!(no_confirm.0, StatusCode::CONFLICT);
+
+    // Confirmed delete appends ?confirm=true -> succeeds with 200 OK.
+    client
+        .delete_owned_item(A, &created.id, true)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn create_report_handles_lost_response_concurrent_duplicates_and_digest_conflict() {
+    let (mut store, _) = setup().await;
+    let mock_reports = annotations_api::dal::reports::MockReports::new();
+    store.reports = mock_reports.clone();
+    let router = presentation::router(App {
+        store: store.clone(),
+    });
+
+    let n1 = create(
+        &router,
+        A,
+        json!({
+            "client_note_id": "fault-retry-n1",
+            "metadata": {"title": "Fault Retry Note"},
+            "representations": {"typed": {"schema_version": 1, "document": typed("Body")}}
+        }),
+    )
+    .await;
+    let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
+
+    // 1. Reports creates the item but the response is lost (503).
+    mock_reports.set_drop_next_create_response(true);
+    let lost = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "First Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(lost.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(mock_reports.create_calls_count(), 1);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM note_report_references WHERE note_id IS NOT NULL"
+        )
+        .await,
+        0
+    );
+
+    // 2. Retrying the same operation_key with a changed digest fails with 409 BEFORE calling Reports.
+    let conflict = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "Different Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT);
+    assert_eq!(conflict.body["code"], "operation_key_conflict");
+    assert_eq!(mock_reports.create_calls_count(), 1);
+
+    // 3. Retrying with the same request replays the already-created item via the server-minted receipt.
+    let replay = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(A),
+        &[],
+        Some(json!({
+            "mode": "create",
+            "operation_key": "op-lost-1",
+            "project": "proj-a",
+            "item": {"title": "First Title", "template_id": "bar", "template_version": 1}
+        })),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CREATED, "{:?}", replay.body);
+    assert_eq!(replay.body["report_item_id"], "rep-created-1");
+    assert_eq!(mock_reports.create_calls_count(), 2);
+
+    // 4. Concurrent duplicate requests with the same operation_key create only one report item.
+    let conc_body = json!({
+        "mode": "create",
+        "operation_key": "op-conc-1",
+        "project": "proj-a",
+        "item": {"title": "Concurrent Item", "template_id": "bar", "template_version": 1}
+    });
+    let reports_uri = format!("/me/notes/{n1_id}/reports");
+    let (c1, c2) = tokio::join!(
+        call(
+            &router,
+            "POST",
+            &reports_uri,
+            Some(A),
+            &[],
+            Some(conc_body.clone()),
+        ),
+        call(&router, "POST", &reports_uri, Some(A), &[], Some(conc_body))
+    );
+    assert_eq!(c1.status, StatusCode::CREATED, "{:?}", c1.body);
+    assert_eq!(c2.status, StatusCode::CREATED, "{:?}", c2.body);
+    assert_eq!(c1.body["report_item_id"], "rep-created-2");
+    assert_eq!(c2.body["report_item_id"], "rep-created-2");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM note_report_references").await,
+        2
+    );
 }

@@ -3,7 +3,7 @@
 //! live in `domain::notes`.
 use crate::domain::{
     App,
-    notes::{self, ListQuery, NoteError, View},
+    notes::{self, ListQuery, NoteError, RegisterReportReferenceInput, View},
     publication,
 };
 use axum::{
@@ -30,6 +30,15 @@ pub fn routes() -> Router<App> {
         .route(
             "/me/notes/{note_id}",
             get(detail).put(replace).patch(change).delete(remove),
+        )
+        .route("/me/notes/{note_id}/reports", post(register_report_ref))
+        .route(
+            "/me/notes/{note_id}/reports/delete-preview",
+            get(report_delete_preview),
+        )
+        .route(
+            "/me/notes/{note_id}/reports/retry-cleanup",
+            post(retry_report_cleanup),
         )
         .route(
             "/me/notes/{note_id}/publication",
@@ -289,6 +298,7 @@ async fn change(
 #[derive(serde::Deserialize)]
 pub struct DeleteParams {
     delete_owned_reports: Option<String>,
+    confirm_reused_report_ids: Option<String>,
 }
 async fn remove(
     State(app): State<App>,
@@ -296,17 +306,63 @@ async fn remove(
     Path(note_id): Path<String>,
     Query(p): Query<DeleteParams>,
     headers: HeaderMap,
-) -> Result<StatusCode, NoteError> {
+) -> Result<Response, NoteError> {
     let expected = if_match(&headers)?;
-    notes::delete(
+    let confirmed_reused: Vec<String> = p
+        .confirm_reused_report_ids
+        .as_deref()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let (cascade, outcome) = notes::delete(
         &app.store,
         &owner,
         &note_id,
         expected,
         p.delete_owned_reports.as_deref(),
+        &confirmed_reused,
     )
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+    if cascade {
+        Ok((StatusCode::OK, Json(outcome)).into_response())
+    } else {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    }
+}
+
+async fn register_report_ref(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Value>), NoteError> {
+    let input: RegisterReportReferenceInput = serde_json::from_slice(&body)
+        .map_err(|_| NoteError::invalid("invalid_body", "Invalid JSON body"))?;
+    let saved = notes::register_report_reference(&app.store, &owner, &note_id, input).await?;
+    Ok((StatusCode::CREATED, Json(saved)))
+}
+
+async fn report_delete_preview(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+) -> Result<Json<Value>, NoteError> {
+    let preview = notes::report_delete_preview(&app.store, &owner, &note_id).await?;
+    Ok(Json(serde_json::json!(preview)))
+}
+
+async fn retry_report_cleanup(
+    State(app): State<App>,
+    Owner(owner): Owner,
+    Path(note_id): Path<String>,
+) -> Result<Json<Value>, NoteError> {
+    let outcome = notes::run_report_cleanup(&app.store, &owner, &note_id, 0).await?;
+    Ok(Json(serde_json::json!(outcome)))
 }
 
 async fn publication_detail(

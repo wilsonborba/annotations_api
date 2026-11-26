@@ -141,6 +141,7 @@ fn couch_down() -> Documents {
             cortex_url: String::new(),
             plane_url: String::new(),
             gateway_url: String::new(),
+            reports_url: String::new(),
             plane_api_key: String::new(),
             plane_workspace: String::new(),
             certifications_url: String::new(),

@@ -7,6 +7,7 @@ pub mod files;
 pub mod links;
 pub mod models;
 pub mod plane;
+pub mod reports;
 pub mod rooms;
 pub mod training;
 pub mod transcriptions;
@@ -16,7 +17,7 @@ use crate::core::{Error, Result, Settings};
 use sqlx::{AnyPool, any::AnyPoolOptions};
 use std::sync::Arc;
 /// Migrations in apply order for SQLite fixtures. 005, 008, 012, 013, 018 and 019 use their tested SQLite equivalents.
-pub const SQLITE_MIGRATIONS: [&str; 24] = [
+pub const SQLITE_MIGRATIONS: [&str; 25] = [
     include_str!("../../migrations/001_schema.sql"),
     include_str!("../../migrations/002_media.sql"),
     include_str!("../../migrations/003_owner_links.sql"),
@@ -41,6 +42,7 @@ pub const SQLITE_MIGRATIONS: [&str; 24] = [
     include_str!("../../migrations/022_v2_task_containers.sql"),
     include_str!("../../tests/sqlite/023_v2_task_container_identifier.sql"),
     include_str!("../../migrations/024_drop_local_waitlist.sql"),
+    include_str!("../../tests/sqlite/025_v2_note_report_references.sql"),
 ];
 #[derive(Clone)]
 pub struct Store {
@@ -59,6 +61,8 @@ pub struct Store {
     pub waitlist: Arc<dyn waitlist::WaitlistClient>,
     /// Optional Certifications client for prepared study handoff.
     pub certifications: Arc<dyn certifications::CertificationsClient>,
+    /// Optional Reports client for verifying ownership and cascading created-for-note deletes.
+    pub reports: Arc<dyn reports::ReportsClient>,
     /// Cloud transcription execution. No server runtime exists yet.
     pub execution: Arc<dyn execution::CloudExecution>,
     pub http: reqwest::Client,
@@ -104,6 +108,7 @@ impl Store {
                 settings.certifications_service_key,
                 http.clone(),
             ),
+            reports: reports::HttpReports::client(settings.reports_url, http.clone()),
             execution: execution::none(),
             http,
         })
@@ -134,6 +139,7 @@ impl Store {
             plane: Arc::new(plane::DisabledPlane),
             waitlist: Arc::new(waitlist::DisabledWaitlist),
             certifications: Arc::new(certifications::DisabledCertifications),
+            reports: Arc::new(reports::DisabledReports),
             execution: execution::none(),
             http: reqwest::Client::new(),
         }
