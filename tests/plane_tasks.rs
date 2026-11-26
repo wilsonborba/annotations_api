@@ -272,6 +272,35 @@ async fn user_isolation_update_failure_preserves_state_and_no_plane_secrets_leak
     .await;
     assert_eq!(sb_get, StatusCode::NOT_FOUND);
 
+    // Foreign updates and deletes are denied before the Plane adapter is called.
+    let (sb_update, _) = call(
+        &router,
+        "PATCH",
+        &format!("/me/tasks/{task_id}"),
+        Some(B),
+        Some(json!({"status": "completed"})),
+    )
+    .await;
+    assert_eq!(sb_update, StatusCode::NOT_FOUND);
+    let (sb_delete, _) = call(
+        &router,
+        "DELETE",
+        &format!("/me/tasks/{task_id}"),
+        Some(B),
+        None,
+    )
+    .await;
+    assert_eq!(sb_delete, StatusCode::NOT_FOUND);
+    let (_, owner_view) = call(
+        &router,
+        "GET",
+        &format!("/me/tasks/{task_id}"),
+        Some(A),
+        None,
+    )
+    .await;
+    assert_eq!(owner_view["status"], "open");
+
     // Update failure leaves the old state and returns the Plane error category.
     plane.fail_update.store(true, Ordering::SeqCst);
     let (sf, err) = call(

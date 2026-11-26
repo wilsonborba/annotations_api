@@ -1408,6 +1408,23 @@ pub async fn run_report_cleanup(
     note_id: &str,
     skipped_linked_count: usize,
 ) -> R<DeleteNoteOutcome> {
+    // A cleanup retry is admitted only after this caller's durable deletion
+    // record or owner-bound cleanup record exists. The note row is intentionally
+    // gone by the time a failed cascade is retried.
+    let admitted = sqlx::query(
+        "SELECT 1 FROM note_changes WHERE note_id=$1 AND owner_id=$2 AND change_kind='delete'
+         UNION ALL
+         SELECT 1 FROM note_report_cleanup WHERE note_id=$1 AND owner_id=$2
+         LIMIT 1",
+    )
+    .bind(note_id)
+    .bind(owner)
+    .fetch_optional(&store.db)
+    .await?
+    .is_some();
+    if !admitted {
+        return Err(NoteError::not_found());
+    }
     run_report_cleanup_with_warnings(store, owner, note_id, Vec::new(), skipped_linked_count).await
 }
 

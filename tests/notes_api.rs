@@ -1167,6 +1167,22 @@ async fn notes_prepared_certifications_handoff_uses_owned_files_and_service_key(
     assert_eq!(stolen.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(captured.lock().unwrap().is_empty());
 
+    // The owner cannot be switched to B for a valid source on A's note.
+    let foreign_owner = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/certifications/prepared"),
+        Some(B),
+        &[],
+        Some(json!({
+            "title": "Biology Prep",
+            "sources": [{"file_id": "file-b-ready"}]
+        })),
+    )
+    .await;
+    assert_eq!(foreign_owner.status, StatusCode::NOT_FOUND);
+    assert!(captured.lock().unwrap().is_empty());
+
     // Succeeds for owned ready file without browser holding CERTIFICATIONS_SERVICE_KEY or raw fsm_ref.
     let ok = call(
         &router,
@@ -1733,6 +1749,27 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     assert_eq!(n1.status, StatusCode::CREATED, "{}", n1.body);
     let n1_id = n1.body["note_id"].as_str().unwrap().to_string();
 
+    // Retry is unavailable before deletion, including for the current owner.
+    // A missing UUID also must not receive the default note_deleted=true result.
+    for (who, target) in [(B, n1_id.as_str()), (A, "missing-retry-note")] {
+        let r = call(
+            &router,
+            "POST",
+            &format!("/me/notes/{target}/reports/retry-cleanup"),
+            Some(who),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::NOT_FOUND,
+            "{who} {target}: {:?}",
+            r.body
+        );
+    }
+    assert!(mock_reports.delete_calls().is_empty());
+
     let n2 = create(
         &router,
         A,
@@ -1876,6 +1913,28 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     )
     .await;
     assert_eq!(preview.status, StatusCode::OK);
+
+    // Every Reports helper route stays scoped to the note owner.
+    let foreign_preview = call(
+        &router,
+        "GET",
+        &format!("/me/notes/{n1_id}/reports/delete-preview"),
+        Some(B),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(foreign_preview.status, StatusCode::NOT_FOUND);
+    let foreign_register = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports"),
+        Some(B),
+        &[],
+        Some(json!({"report_item_id": "rep-linked-preexisting", "relation_kind": "linked"})),
+    )
+    .await;
+    assert_eq!(foreign_register.status, StatusCode::NOT_FOUND);
     let created_items = preview.body["created_items"].as_array().unwrap();
     let reused_entry = created_items
         .iter()
@@ -1924,6 +1983,26 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
 
     // Retry cleanup after Reports recovers -> deletes rep_fail cleanly.
     mock_reports.set_delete_failure(&rep_fail, false);
+    let delete_calls_before_foreign_retry = mock_reports.delete_calls();
+    let foreign_retry = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports/retry-cleanup"),
+        Some(B),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(
+        mock_reports.delete_calls(),
+        delete_calls_before_foreign_retry
+    );
+    assert_eq!(
+        foreign_retry.status,
+        StatusCode::NOT_FOUND,
+        "foreign retry response: {:?}",
+        foreign_retry.body
+    );
     let retry = call(
         &router,
         "POST",
@@ -1936,6 +2015,22 @@ async fn reports_created_for_note_cascade_reuse_warning_and_retry() {
     assert_eq!(retry.status, StatusCode::OK);
     assert_eq!(retry.body["deleted_report_ids"], json!([rep_fail]));
     assert_eq!(retry.body["failed_report_deletions"], json!([]));
+
+    // Durable deletion evidence preserves the established idempotent retry.
+    let completed_calls = mock_reports.delete_calls();
+    let repeated_retry = call(
+        &router,
+        "POST",
+        &format!("/me/notes/{n1_id}/reports/retry-cleanup"),
+        Some(A),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(repeated_retry.status, StatusCode::OK);
+    assert_eq!(repeated_retry.body["note_deleted"], true);
+    assert_eq!(repeated_retry.body["deleted_report_ids"], json!([]));
+    assert_eq!(mock_reports.delete_calls(), completed_calls);
 
     // Scoped explicit confirmation: create on n3, reuse on n2, delete n3 WITH confirm_reused_report_ids -> deleted with confirm=true!
     let n3 = create(
